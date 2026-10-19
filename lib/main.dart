@@ -2456,8 +2456,11 @@ bool requireSubscription(BuildContext context) {
 
 /// Only SMS can be sent (through Telnyx). Email is not available yet.
 bool requireSms(BuildContext context, Channel channel) {
-  if (channel == Channel.sms) return true;
-  showToast(context, 'Email sending is not available yet. SMS is live through Telnyx.');
+  // Allow both SMS and Email now that the Edge Functions are live!
+  if (channel == Channel.sms || channel == Channel.email) return true;
+  
+  // Keep the toast as a fallback only if an unknown channel is passed
+  showToast(context, 'Channel not supported.');
   return false;
 }
 
