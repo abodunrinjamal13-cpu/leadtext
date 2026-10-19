@@ -3,6 +3,7 @@
 
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'main.dart';
@@ -372,5 +373,43 @@ class SupabaseService {
 
   static Future<void> deleteConversation(String id) async {
     await _db.from('conversations').delete().eq('id', id).eq('user_id', _uid);
+  }
+
+  // -------------------------------------------------------------------------
+  // Edge Functions / Email Sending
+  // -------------------------------------------------------------------------
+
+  static Future<bool> sendEmailCampaign({
+    required String recipientEmail,
+    required String fromName,
+    required String fromEmail,
+    required String subject,
+    required String message,
+    required String userTelnyxApiKey,
+  }) async {
+    try {
+      final response = await _db.functions.invoke(
+        'send-email',
+        body: {
+          'to': recipientEmail,
+          'fromName': fromName,
+          'fromEmail': fromEmail,
+          'subject': subject,
+          'message': message,
+          'telnyxApiKey': userTelnyxApiKey,
+        },
+      );
+
+      if (response.status == 200) {
+        debugPrint('Email campaign dispatched successfully!');
+        return true;
+      } else {
+        debugPrint('Failed to send email: ${response.data}');
+        return false;
+      }
+    } catch (e) {
+      debugPrint('Error sending email campaign: $e');
+      return false;
+    }
   }
 }
