@@ -1045,21 +1045,30 @@ class AppState extends ChangeNotifier {
     return convo;
   }
 
-  /// Sends the message through Telnyx (server side). The server also saves it
-  /// in the conversation, so the app only updates its own copy.
+/// Sends the message through Telnyx (for SMS) or Supabase send-email (for Email).
   Future<void> _deliver(Conversation convo, ChatMessage msg) async {
     _sending++;
     try {
+      final isEmail = convo.channel == Channel.email;
+      
       final res = await Supabase.instance.client.functions.invoke(
-        'telnyx',
-        body: {
-          'action': 'send_sms',
-          'to': convo.address,
-          'text': msg.text,
-          'name': convo.name,
-          'conversation_id': convo.id,
-        },
+        isEmail ? 'send-email' : 'telnyx',
+        body: isEmail
+            ? {
+                'to': convo.address,
+                'subject': 'Reply from LeadText',
+                'message': msg.text,
+                'userId': Supabase.instance.client.auth.currentUser?.id,
+              }
+            : {
+                'action': 'send_sms',
+                'to': convo.address,
+                'text': msg.text,
+                'name': convo.name,
+                'conversation_id': convo.id,
+              },
       );
+      
       final d = res.data is Map
           ? Map<String, dynamic>.from(res.data as Map)
           : <String, dynamic>{};
@@ -2454,12 +2463,9 @@ bool requireSubscription(BuildContext context) {
   return false;
 }
 
-/// Only SMS can be sent (through Telnyx). Email is not available yet.
+/// Allows sending for both SMS and Email channels now that the Edge Functions are live.
 bool requireSms(BuildContext context, Channel channel) {
-  // Allow both SMS and Email now that the Edge Functions are live!
   if (channel == Channel.sms || channel == Channel.email) return true;
-  
-  // Keep the toast as a fallback only if an unknown channel is passed
   showToast(context, 'Channel not supported.');
   return false;
 }
@@ -9338,7 +9344,7 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                 _buildFeatureRow('1-to-1 messaging with replies'),
                 _buildFeatureRow('Contact import and management'),
                 _buildFeatureRow('LeadMarket access'),
-                _buildFeatureRow('300 LeadCoins included every month'),
+                _buildFeatureRow('5 LeadCoins welcome bonus'),
                 _buildFeatureRow('Campaign tracking and history'),
                 _buildFeatureRow('Bring your own Telnyx account'),
               ],
@@ -9358,15 +9364,15 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                           : 'Not subscribed',
                 ),
                 const Divider(),
-                const SummaryRow(label: 'Includes', value: '300 LeadCoins / month'),
+                const SummaryRow(label: 'Includes', value: 'Platform access + Email suite'),
               ],
             ),
           ),
           const SizedBox(height: 12),
           const Text(
             'Paid securely with Paystack. Each payment adds one month, so '
-            'there is nothing to cancel. SMS charges are billed separately by '
-            'your own Telnyx account.',
+            'there is nothing to cancel. SMS charges are billed directly via your linked Telnyx account. '
+            'Emails and LeadMarket lists require LeadCoins.',
             style: TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
           ),
           const SizedBox(height: 20),
