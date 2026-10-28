@@ -184,11 +184,33 @@ class SupabaseService {
 
   static Future<void> deleteContact(Contact c) async {
     if (c.key.isEmpty) return;
+
+    final column = c.phone.isNotEmpty ? 'phone' : 'email';
+    final rows = await _db
+        .from('contacts')
+        .select('id')
+        .eq('user_id', _uid)
+        .eq(column, c.key);
+
+    final ids = rows
+        .map((row) => row['id'] as String?)
+        .whereType<String>()
+        .toList();
+    if (ids.isEmpty) return;
+
+    // Remove list memberships first so deletion also works when the database
+    // does not have ON DELETE CASCADE configured for contact_list_members.
+    await _db
+        .from('contact_list_members')
+        .delete()
+        .eq('user_id', _uid)
+        .inFilter('contact_id', ids);
+
     await _db
         .from('contacts')
         .delete()
         .eq('user_id', _uid)
-        .eq(c.phone.isNotEmpty ? 'phone' : 'email', c.key);
+        .inFilter('id', ids);
   }
 
   // -------------------------------------------------------------------------
@@ -214,6 +236,8 @@ class SupabaseService {
       'name': c.name,
       'message': c.message,
       'subject': c.subject.isEmpty ? null : c.subject,
+      'sender_name': c.fromName.isEmpty ? null : c.fromName,
+      'sender_email': c.fromEmail.isEmpty ? null : c.fromEmail,
       'channel': c.channel == Channel.sms ? 'sms' : 'email',
       'status': _campaignStatusOut(c.status),
       'recipients_count': c.recipients,
@@ -243,12 +267,15 @@ class SupabaseService {
           name: r['name'] as String,
           message: r['message'] as String,
           subject: (r['subject'] as String?) ?? '',
+          fromName: (r['sender_name'] as String?) ?? '',
+          fromEmail: (r['sender_email'] as String?) ?? '',
           channel: r['channel'] == 'email' ? Channel.email : Channel.sms,
           recipients: r['recipients_count'] as int,
-          delivered: r['delivered_count'] as int,
-          failed: r['failed_count'] as int,
-          opened: r['opened_count'] as int,
-          replies: r['replied_count'] as int,
+          sentCount: (r['sent_count'] as int?) ?? (r['delivered_count'] as int? ?? 0),
+          delivered: (r['delivered_count'] as int?) ?? 0,
+          failed: (r['failed_count'] as int?) ?? 0,
+          opened: (r['opened_count'] as int?) ?? 0,
+          replies: (r['replied_count'] as int?) ?? 0,
           status: _campaignStatusIn(r['status'] as String),
           createdAt: DateTime.parse(r['created_at'] as String).toLocal(),
         ),
@@ -380,35 +407,34 @@ class SupabaseService {
   // -------------------------------------------------------------------------
 
   static Future<bool> sendEmailCampaign({
-    required String recipientEmail,
+    required String campaignId,
+    required String campaignName,
+    required List<String> recipientEmails,
     required String fromName,
     required String fromEmail,
     required String subject,
     required String message,
-    required String userTelnyxApiKey,
   }) async {
     try {
       final response = await _db.functions.invoke(
         'send-email',
         body: {
-          'to': recipientEmail,
+          'action': 'send_campaign',
+          'campaign_id': campaignId,
+          'name': campaignName,
+          'channel': 'email',
+          'addresses': recipientEmails,
           'fromName': fromName,
           'fromEmail': fromEmail,
           'subject': subject,
           'message': message,
-          'telnyxApiKey': userTelnyxApiKey,
         },
       );
-
-      if (response.status == 200) {
-        debugPrint('Email campaign dispatched successfully!');
-        return true;
-      } else {
-        debugPrint('Failed to send email: ${response.data}');
-        return false;
-      }
+      final data = response.data;
+      return response.status >= 200 && response.status < 300 &&
+          data is Map && data['success'] == true;
     } catch (e) {
-      debugPrint('Error sending email campaign: $e');
+      debugPrint('Error starting Brevo email campaign: $e');
       return false;
     }
   }

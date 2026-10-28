@@ -359,10 +359,13 @@ class Campaign {
   final String name;
   final String message;
   final String subject;
+  final String fromName;
+  final String fromEmail;
   final Channel channel;
   final int recipients;
   final int segments;
   final DateTime createdAt;
+  int sentCount;
   int delivered;
   int failed;
   int opened;
@@ -377,7 +380,10 @@ class Campaign {
     required this.channel,
     required this.recipients,
     this.subject = '',
+    this.fromName = '',
+    this.fromEmail = '',
     this.segments = 1,
+    this.sentCount = 0,
     this.delivered = 0,
     this.failed = 0,
     this.opened = 0,
@@ -387,10 +393,14 @@ class Campaign {
   })  : id = id ?? newId(),
         createdAt = createdAt ?? DateTime.now();
 
-  int get sent => delivered + failed;
+  /// Messages accepted by the provider (includes later delivered/opened/replied).
+  int get sent => sentCount > delivered ? sentCount : delivered;
+  /// Recipients with a final send outcome; useful for campaign progress.
+  int get processed => sent + failed;
   bool get isActive => status != CampaignStatus.completed;
-  double get progress =>
-      recipients == 0 ? 0 : (sent / recipients).clamp(0.0, 1.0).toDouble();
+  double get progress => recipients == 0
+      ? 0
+      : (processed / recipients).clamp(0.0, 1.0).toDouble();
 }
 /// Everything entered on the "New campaign" screen, passed along the flow.
 class CampaignDraft {
@@ -795,6 +805,10 @@ class AppState extends ChangeNotifier {
   DateTime? periodEnd; // end of the paid subscription period
   bool telnyxWebhookOk = false; // replies reach the Messages tab
   bool telnyxKeyInvalid = false; // Telnyx rejected the saved key
+  bool emailProviderConnected = false;
+  String emailSenderEmail = '';
+  String emailSenderName = '';
+  bool emailProviderBusy = false;
   int _sending = 0; // in-flight sends (pauses background refresh)
   bool _polling = false;
   int _tickN = 0;
@@ -848,6 +862,7 @@ class AppState extends ChangeNotifier {
 
       await refreshBilling();
       unawaited(loadTelnyxStatus());
+      unawaited(loadEmailProviderStatus());
 
       signedIn = true;
       tab = 0;
@@ -976,8 +991,9 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     _sending++;
     try {
+      final isEmail = campaign.channel == Channel.email;
       final res = await Supabase.instance.client.functions.invoke(
-        'telnyx',
+        isEmail ? 'send-email' : 'telnyx',
         body: {
           'action': 'send_campaign',
           'campaign_id': campaign.id,
@@ -986,6 +1002,8 @@ class AppState extends ChangeNotifier {
           'subject': campaign.subject,
           'channel': campaign.channel.name,
           'addresses': addresses,
+          if (isEmail) 'fromName': campaign.fromName,
+          if (isEmail) 'fromEmail': campaign.fromEmail,
         },
       );
       final d = res.data is Map
@@ -1294,6 +1312,24 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---- Per-user Brevo email provider ----
+  Future<void> loadEmailProviderStatus() async {
+    try {
+      final res = await Supabase.instance.client.functions.invoke(
+        'email-provider-status',
+      );
+      final d = res.data is Map
+          ? Map<String, dynamic>.from(res.data as Map)
+          : <String, dynamic>{};
+      emailProviderConnected = d['connected'] == true;
+      emailSenderEmail = (d['senderEmail'] as String?) ?? '';
+      emailSenderName = (d['senderName'] as String?) ?? '';
+    } catch (e) {
+      debugPrint('Email provider status failed: $e');
+    }
+    notifyListeners();
+  }
+
   // ---- Telnyx (every call goes through the `telnyx` Edge Function) ----
   Future<void> loadTelnyxStatus() async {
     try {
@@ -1398,10 +1434,11 @@ class AppState extends ChangeNotifier {
         c.status = CampaignStatus.sending;
         continue;
       }
-      final remaining = c.recipients - c.sent;
+      final remaining = c.recipients - c.processed;
       final step = min(remaining, max(1, (c.recipients * 0.06).round()));
       final failed = (step * 0.03).round();
       c.failed += failed;
+      c.sentCount += step - failed;
       c.delivered += step - failed;
       if (c.channel == Channel.email) {
         c.opened = min(c.delivered, c.opened + ((step - failed) * 0.4).round());
@@ -1413,7 +1450,7 @@ class AppState extends ChangeNotifier {
         );
       }
       if (_rnd.nextInt(3) == 0) c.replies += 1;
-      if (c.sent >= c.recipients) {
+      if (c.processed >= c.recipients) {
         c.status = CampaignStatus.completed;
         _run(() => SupabaseService.setCampaignStatus(c.id, CampaignStatus.completed));
       }
@@ -4991,7 +5028,7 @@ class CampaignDetailsPage extends StatelessWidget {
                       : _MetricTile(
                           label: 'Failed',
                           value: formatCount(c.failed),
-                          sub: '(${_pct(c.failed, c.sent)})',
+                          sub: '(${_pct(c.failed, c.processed)})',
                         ),
                 ),
                 const SizedBox(width: 10),
@@ -5278,11 +5315,11 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
     super.didChangeDependencies();
     if (_prefilled) return;
     _prefilled = true;
-    final provider = AppScope.of(context).provider;
-    if (provider != null && provider.emailDomain.isNotEmpty) {
-      fromEmailController.text = 'hello@${provider.emailDomain}';
-    }
-    final name = AppScope.of(context).userName;
+    final state = AppScope.of(context);
+    // Email campaigns use the sender verified in the connected Brevo account.
+    fromEmailController.text = state.emailSenderEmail;
+    final senderName = state.emailSenderName.trim();
+    final name = senderName.isNotEmpty ? senderName : state.userName;
     if (name.isNotEmpty) fromNameController.text = name;
   }
 
@@ -5332,9 +5369,11 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
       return false;
     }
     if (channel == Channel.email) {
-      return subjectController.text.trim().isNotEmpty &&
-          fromNameController.text.trim().isNotEmpty &&
-          isValidEmail(fromEmailController.text);
+      final state = AppScope.of(context);
+      return state.emailProviderConnected &&
+          isValidEmail(state.emailSenderEmail) &&
+          subjectController.text.trim().isNotEmpty &&
+          fromNameController.text.trim().isNotEmpty;
     }
     return true;
   }
@@ -5415,15 +5454,20 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
                 decoration: const InputDecoration(hintText: 'e.g. LeadText Team'),
               ),
               _gap(),
-              const FieldLabel('From email'),
-              const SizedBox(height: 6),
-              TextField(
-                controller: fromEmailController,
-                onChanged: (_) => setState(() {}),
-                keyboardType: TextInputType.emailAddress,
-                autocorrect: false,
-                decoration: const InputDecoration(hintText: 'hello@yourdomain.com'),
-              ),
+              if (AppScope.of(context).emailProviderConnected)
+                AppCard(
+                  child: InfoBullet(
+                    icon: Icons.verified_outlined,
+                    text: 'Sending from ${AppScope.of(context).emailSenderEmail}. LeadText will use your connected Brevo sender automatically.',
+                  ),
+                )
+              else
+                const AppCard(
+                  child: InfoBullet(
+                    icon: Icons.warning_amber_rounded,
+                    text: 'Connect your Brevo account in Settings before creating an email campaign.',
+                  ),
+                ),
               _gap(),
               const FieldLabel('Subject'),
               const SizedBox(height: 6),
@@ -5991,6 +6035,8 @@ class ReviewSendPage extends StatelessWidget {
       name: draft.name,
       message: draft.message,
       subject: draft.subject,
+      fromName: draft.fromName,
+      fromEmail: draft.fromEmail,
       channel: draft.channel,
       recipients: recipients,
       segments: draft.segments,
@@ -6361,7 +6407,34 @@ class _ContactsPageState extends State<ContactsPage> {
                                   color: kRed,
                                 ),
                               ),
-                              child: _ContactRow(contact: contact),
+                              child: _ContactRow(
+                                contact: contact,
+                                onDelete: () async {
+                                  final confirmed = await showDialog<bool>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      title: const Text('Delete contact?'),
+                                      content: Text(
+                                        'Remove ${contact.displayName} from your contacts? This cannot be undone.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.of(dialogContext).pop(false),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => Navigator.of(dialogContext).pop(true),
+                                          child: const Text('Delete', style: TextStyle(color: kRed)),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirmed == true && context.mounted) {
+                                    state.removeContact(contact);
+                                    showToast(context, 'Contact deleted');
+                                  }
+                                },
+                              ),
                             );
                           },
                         ),
@@ -6375,8 +6448,9 @@ class _ContactsPageState extends State<ContactsPage> {
 
 class _ContactRow extends StatelessWidget {
   final Contact contact;
+  final VoidCallback onDelete;
 
-  const _ContactRow({required this.contact});
+  const _ContactRow({required this.contact, required this.onDelete});
 
   void _openChat(BuildContext context) {
     final state = AppScope.of(context);
@@ -6435,10 +6509,11 @@ class _ContactRow extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(
-              contact.phone.isNotEmpty ? Icons.sms_outlined : Icons.mail_outline_rounded,
-              size: 16,
-              color: kFaint,
+            IconButton(
+              tooltip: 'Delete contact',
+              visualDensity: VisualDensity.compact,
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline_rounded, color: kRed, size: 20),
             ),
           ],
         ),
@@ -8663,17 +8738,32 @@ class MoreTab extends StatelessWidget {
               InfoBullet(
                 icon: Icons.account_balance_wallet_outlined,
                 text: kLeadMarketEnabled
-                    ? 'Subscription, LeadCoins and your Telnyx balance are '
-                        'billed separately and never mixed.'
-                    : 'Your LeadText subscription and your Telnyx balance are '
-                        'billed separately. Telnyx charges for messages go to '
-                        'your own Telnyx account.',
+                    ? 'Subscription, LeadCoins and provider charges are billed separately.'
+                    : 'Your LeadText subscription and provider charges are billed separately. SMS/email providers bill your own accounts.',
               ),
               const SizedBox(height: 22),
               AppCard(
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
+                    _MenuRow(
+                      icon: Icons.mail_outline_rounded,
+                      title: 'Email provider · Brevo',
+                      value: state.emailProviderConnected ? 'Connected' : 'Not connected',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const EmailProviderPage()),
+                      ),
+                    ),
+                    const Divider(),
+                    _MenuRow(
+                      icon: Icons.sms_outlined,
+                      title: 'Twilio SMS',
+                      value: 'Setup',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const TwilioPage()),
+                      ),
+                    ),
+                    const Divider(),
                     _MenuRow(
                       icon: Icons.settings_outlined,
                       title: 'Settings',
@@ -8901,6 +8991,339 @@ class TelnyxBalanceCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Per-user Brevo email connection
+// ---------------------------------------------------------------------------
+
+class EmailProviderPage extends StatefulWidget {
+  const EmailProviderPage({super.key});
+
+  @override
+  State<EmailProviderPage> createState() => _EmailProviderPageState();
+}
+
+class _EmailProviderPageState extends State<EmailProviderPage> {
+  final apiKeyController = TextEditingController();
+  final senderEmailController = TextEditingController();
+  final senderNameController = TextEditingController();
+  bool busy = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) AppScope.of(context).loadEmailProviderStatus();
+    });
+  }
+
+  @override
+  void dispose() {
+    apiKeyController.dispose();
+    senderEmailController.dispose();
+    senderNameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _connect() async {
+    final key = apiKeyController.text.trim();
+    final email = senderEmailController.text.trim();
+    if (key.isEmpty) {
+      setState(() => error = 'Paste your Brevo API key first.');
+      return;
+    }
+    if (email.isNotEmpty && !isValidEmail(email)) {
+      setState(() => error = 'Enter a valid sender email address.');
+      return;
+    }
+
+    final state = AppScope.of(context);
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final res = await Supabase.instance.client.functions.invoke(
+        'connect-email-provider',
+        body: {
+          'apiKey': key,
+          if (email.isNotEmpty) 'senderEmail': email,
+          if (senderNameController.text.trim().isNotEmpty)
+            'senderName': senderNameController.text.trim(),
+        },
+      );
+      final data = res.data is Map
+          ? Map<String, dynamic>.from(res.data as Map)
+          : <String, dynamic>{};
+      if (data['success'] != true && data['connected'] != true) {
+        throw Exception(data['error'] ?? 'Could not connect Brevo.');
+      }
+      apiKeyController.clear();
+      await state.loadEmailProviderStatus();
+      if (mounted) showToast(context, 'Brevo connected to your LeadText account.');
+    } catch (e) {
+      if (mounted) setState(() => error = friendlyError(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Email provider')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(child: Text('Brevo account', style: h2)),
+                    Pill(
+                      state.emailProviderConnected ? 'Connected' : 'Not connected',
+                      color: state.emailProviderConnected ? kGreen : kAmber,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Connect your own Brevo account. Your API key is validated and encrypted by LeadText’s backend.',
+                  style: bodyMuted,
+                ),
+                if (state.emailProviderConnected) ...[
+                  const SizedBox(height: 16),
+                  SummaryRow(
+                    label: 'Sender email',
+                    value: state.emailSenderEmail.isEmpty
+                        ? 'Not set'
+                        : state.emailSenderEmail,
+                  ),
+                  if (state.emailSenderName.isNotEmpty) ...[
+                    const Divider(),
+                    SummaryRow(label: 'Sender name', value: state.emailSenderName),
+                  ],
+                  const SizedBox(height: 12),
+                  const Text(
+                    'To change accounts, the backend needs a secure disconnect action. Until that is added, this connected account remains active.',
+                    style: rowSub,
+                  ),
+                ] else ...[
+                  const SizedBox(height: 18),
+                  const FieldLabel('Brevo API key'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: apiKeyController,
+                    obscureText: true,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: const InputDecoration(hintText: 'Paste API key'),
+                  ),
+                  const SizedBox(height: 14),
+                  const FieldLabel('Verified sender email'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: senderEmailController,
+                    keyboardType: TextInputType.emailAddress,
+                    autocorrect: false,
+                    decoration: const InputDecoration(hintText: 'you@yourdomain.com'),
+                  ),
+                  const SizedBox(height: 14),
+                  const FieldLabel('Sender name (optional)'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: senderNameController,
+                    decoration: const InputDecoration(hintText: 'Your business name'),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(error!, style: const TextStyle(color: kRed, fontSize: 12)),
+                  ],
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: busy ? null : _connect,
+                    child: busy
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Connect Brevo'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          const InfoBullet(
+            icon: Icons.lock_outline_rounded,
+            text: 'Never paste your API key into a chat or public place. Use a verified sender address in Brevo.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Twilio setup screen
+// ---------------------------------------------------------------------------
+
+class TwilioPage extends StatefulWidget {
+  const TwilioPage({super.key});
+
+  @override
+  State<TwilioPage> createState() => _TwilioPageState();
+}
+
+class _TwilioPageState extends State<TwilioPage> {
+  final accountSidController = TextEditingController();
+  final authTokenController = TextEditingController();
+  final numberController = TextEditingController();
+  String numberType = 'local';
+  bool busy = false;
+  String? error;
+
+  @override
+  void dispose() {
+    accountSidController.dispose();
+    authTokenController.dispose();
+    numberController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _connect() async {
+    final sid = accountSidController.text.trim();
+    final token = authTokenController.text.trim();
+    final number = _normalizePhone(numberController.text.trim());
+    if (!sid.startsWith('AC') || token.isEmpty || number == null) {
+      setState(() => error = 'Enter a valid Twilio Account SID, Auth Token and phone number in international format.');
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      // Requires the `twilio` Supabase Edge Function with secure credential
+      // encryption, provider validation, status, disconnect and send actions.
+      final res = await Supabase.instance.client.functions.invoke(
+        'twilio',
+        body: {
+          'action': 'connect',
+          'account_sid': sid,
+          'auth_token': token,
+          'sms_number': number,
+          'number_type': numberType,
+        },
+      );
+      final data = res.data is Map
+          ? Map<String, dynamic>.from(res.data as Map)
+          : <String, dynamic>{};
+      if (data['success'] != true) {
+        throw Exception(data['error'] ?? 'Twilio connection failed.');
+      }
+      accountSidController.clear();
+      authTokenController.clear();
+      numberController.clear();
+      if (mounted) showToast(context, 'Twilio connected.');
+    } catch (e) {
+      if (mounted) setState(() => error = friendlyError(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Twilio SMS')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Connect your Twilio account', style: h2),
+                const SizedBox(height: 8),
+                const Text(
+                  'Use your own Twilio account and pay Twilio directly. Choose a local number or a toll-free number that you already own and have enabled for messaging.',
+                  style: bodyMuted,
+                ),
+                const SizedBox(height: 18),
+                const FieldLabel('Account SID'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: accountSidController,
+                  autocorrect: false,
+                  decoration: const InputDecoration(hintText: 'AC…'),
+                ),
+                const SizedBox(height: 14),
+                const FieldLabel('Auth Token'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: authTokenController,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: const InputDecoration(hintText: 'Twilio Auth Token'),
+                ),
+                const SizedBox(height: 14),
+                const FieldLabel('Sending number'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: numberController,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(hintText: '+14155550101'),
+                ),
+                const SizedBox(height: 14),
+                const FieldLabel('Number type'),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: numberType,
+                  items: const [
+                    DropdownMenuItem(value: 'local', child: Text('Local number')),
+                    DropdownMenuItem(value: 'toll_free', child: Text('Toll-free number')),
+                  ],
+                  onChanged: busy ? null : (v) => setState(() => numberType = v ?? 'local'),
+                  decoration: const InputDecoration(),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(error!, style: const TextStyle(color: kRed, fontSize: 12)),
+                ],
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: busy ? null : _connect,
+                  child: busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Connect Twilio'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          const InfoBullet(
+            icon: Icons.info_outline_rounded,
+            text: 'This screen needs a matching Twilio Edge Function before it can connect. The function must validate and encrypt credentials server-side; do not store Twilio secrets in the app.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Telnyx (real connection through the `telnyx` Edge Function)
 // ---------------------------------------------------------------------------
 
@@ -8914,6 +9337,7 @@ class TelnyxPage extends StatefulWidget {
 class _TelnyxPageState extends State<TelnyxPage> {
   final keyController = TextEditingController();
   final numberController = TextEditingController();
+  String numberType = 'local';
   bool busy = false;
   String? error;
 
@@ -8967,6 +9391,7 @@ class _TelnyxPageState extends State<TelnyxPage> {
           'action': 'connect',
           'api_key': keyController.text.trim(),
           'sms_number': _normalizePhone(numberController.text.trim()),
+          'number_type': numberType,
         },
       );
       final data = res.data is Map
@@ -9135,6 +9560,23 @@ class _TelnyxPageState extends State<TelnyxPage> {
                       keyboardType: TextInputType.phone,
                       autocorrect: false,
                       decoration: const InputDecoration(hintText: '+14155550101'),
+                    ),
+                    const SizedBox(height: 14),
+                    const FieldLabel('Number type'),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      initialValue: numberType,
+                      items: const [
+                        DropdownMenuItem(value: 'local', child: Text('Local number')),
+                        DropdownMenuItem(value: 'toll_free', child: Text('Toll-free number')),
+                      ],
+                      onChanged: busy ? null : (v) => setState(() => numberType = v ?? 'local'),
+                      decoration: const InputDecoration(),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Choose the type of Telnyx number you already own. This does not buy or verify a number for you.',
+                      style: TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
                     ),
                     if (error != null) ...[
                       const SizedBox(height: 12),
