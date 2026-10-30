@@ -230,7 +230,9 @@ class SupabaseService {
       };
 
   static Future<void> saveCampaign(Campaign c) async {
-    await _db.from('campaigns').insert({
+    // Upsert makes retrying a campaign safe when the same campaign ID already
+    // exists. It does not create a second campaign row.
+    await _db.from('campaigns').upsert({
       'id': c.id,
       'user_id': _uid,
       'name': c.name,
@@ -241,7 +243,7 @@ class SupabaseService {
       'channel': c.channel == Channel.sms ? 'sms' : 'email',
       'status': _campaignStatusOut(c.status),
       'recipients_count': c.recipients,
-    });
+    }, onConflict: 'id');
   }
 
   static Future<void> setCampaignStatus(String id, CampaignStatus s) async {
@@ -364,6 +366,13 @@ class SupabaseService {
         .update({'last_message_at': DateTime.now().toUtc().toIso8601String()})
         .eq('id', convo.id)
         .eq('user_id', _uid);
+  }
+
+  /// Updates the saved message status after the provider send attempt.
+  static Future<void> updateMessageStatus(String id, String status) async {
+    await _db.from('messages').update({
+      'status': status,
+    }).eq('id', id);
   }
 
   static Future<void> updateMessageText(String id, String text) async {
