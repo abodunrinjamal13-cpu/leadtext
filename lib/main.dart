@@ -1139,6 +1139,7 @@ await SupabaseService.setCampaignStatus(
                 'text': msg.text,
                 'name': convo.name,
                 'conversation_id': convo.id,
+                'message_id': msg.id,
               },
       );
 
