@@ -834,47 +834,64 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  Future<void> bootstrap() async {
-    final user = SupabaseService.currentUser;
-    if (user == null) return;
-    loading = true;
-    notifyListeners();
-    try {
-      final p = await SupabaseService.fetchProfile();
-      userEmail = (p?['email'] as String?) ?? user.email ?? '';
-      final fullName = ((p?['full_name'] as String?) ?? '').trim();
-      userName = fullName.isNotEmpty ? fullName : _nameFromEmail(userEmail);
-      coins = (p?['coins'] as num?)?.toInt() ?? 0;
+Future<void> bootstrap() async {
+  final user = SupabaseService.currentUser;
+  if (user == null) return;
 
-      final loadedContacts = await SupabaseService.fetchContacts();
-      final loadedCampaigns = await SupabaseService.fetchCampaigns();
-      final loadedConvos = await SupabaseService.fetchConversations();
+  loading = true;
+  notifyListeners();
 
-      contacts
-        ..clear()
-        ..addAll(loadedContacts);
-      campaigns
-        ..clear()
-        ..addAll(loadedCampaigns);
-      conversations
-        ..clear()
-        ..addAll(loadedConvos);
+  try {
+    final p = await SupabaseService.fetchProfile();
 
-      await refreshBilling();
-      unawaited(loadTelnyxStatus());
-      unawaited(loadEmailProviderStatus());
+    userEmail = (p?['email'] as String?) ?? user.email ?? '';
+    final fullName = ((p?['full_name'] as String?) ?? '').trim();
+    userName = fullName.isNotEmpty ? fullName : _nameFromEmail(userEmail);
+    coins = (p?['coins'] as num?)?.toInt() ?? 0;
 
-      signedIn = true;
-      tab = 0;
-      syncError = null;
-    } catch (e) {
-      debugPrint('Bootstrap failed: $e');
-      syncError = e.toString();
-    } finally {
-      loading = false;
-      notifyListeners();
+    final loadedContacts = await SupabaseService.fetchContacts();
+    final loadedCampaigns = await SupabaseService.fetchCampaigns();
+
+    // DEBUG: Check whether campaigns are being loaded from Supabase.
+    debugPrint('========== CAMPAIGN DEBUG ==========');
+    debugPrint('CAMPAIGNS LOADED: ${loadedCampaigns.length}');
+
+    for (final c in loadedCampaigns) {
+      debugPrint('${c.name} | ${c.id} | ${c.status}');
     }
+
+    debugPrint('====================================');
+
+    final loadedConvos = await SupabaseService.fetchConversations();
+
+    contacts
+      ..clear()
+      ..addAll(loadedContacts);
+
+    campaigns
+      ..clear()
+      ..addAll(loadedCampaigns);
+
+    conversations
+      ..clear()
+      ..addAll(loadedConvos);
+
+    await refreshBilling();
+
+    unawaited(loadTelnyxStatus());
+    unawaited(loadEmailProviderStatus());
+
+    signedIn = true;
+    tab = 0;
+    syncError = null;
+  } catch (e) {
+    debugPrint('Bootstrap failed: $e');
+    syncError = e.toString();
+  } finally {
+    loading = false;
+    notifyListeners();
   }
+}
 
   // ---- derived ----
   int get unreadCount => conversations.where((c) => c.unread).length;
@@ -1019,16 +1036,27 @@ class AppState extends ChangeNotifier {
         throw Exception(d['error'] ?? 'The campaign could not be started.');
       }
 
-      // --- Set local counts & status ---
-      campaign.sentCount = addresses.length;
-      campaign.delivered = addresses.length;
-      campaign.status = CampaignStatus.completed;
-      if (isEmail) {
-        campaign.opened = (addresses.length * 0.4).round();
-      }
+     // --- Set campaign counts ---
+campaign.sentCount = addresses.length;
+campaign.delivered = 0;
+campaign.failed = 0;
+campaign.opened = 0;
+campaign.status = CampaignStatus.completed;
 
-      // --- Persist completed status safely via service method ---
-      await SupabaseService.setCampaignStatus(campaign.id, CampaignStatus.completed);
+// --- Save campaign statistics to Supabase ---
+await SupabaseService.updateCampaignStats(
+  id: campaign.id,
+  sent: campaign.sentCount,
+  delivered: campaign.delivered,
+  failed: campaign.failed,
+  opened: campaign.opened,
+  replies: campaign.replies,
+);
+
+await SupabaseService.setCampaignStatus(
+  campaign.id,
+  CampaignStatus.completed,
+);
 
       return null;
     } catch (e) {

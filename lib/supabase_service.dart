@@ -254,6 +254,28 @@ class SupabaseService {
         .eq('user_id', _uid);
   }
 
+  /// Persists campaign statistics so they remain available after app refresh.
+  static Future<void> updateCampaignStats({
+    required String id,
+    required int sent,
+    required int delivered,
+    required int failed,
+    int opened = 0,
+    int replies = 0,
+  }) async {
+    await _db
+        .from('campaigns')
+        .update({
+          'sent_count': sent,
+          'delivered_count': delivered,
+          'failed_count': failed,
+          'opened_count': opened,
+          'replied_count': replies,
+        })
+        .eq('id', id)
+        .eq('user_id', _uid);
+  }
+
   static Future<List<Campaign>> fetchCampaigns() async {
     final rows = await _db
         .from('campaigns')
