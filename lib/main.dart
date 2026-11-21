@@ -7,6 +7,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'supabase_service.dart';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -411,6 +413,7 @@ class CampaignDraft {
   final String message;
   final Channel channel;
   final int segments;
+  final List<String> emailAccountIds;
 
   const CampaignDraft({
     required this.name,
@@ -420,6 +423,7 @@ class CampaignDraft {
     required this.message,
     required this.channel,
     required this.segments,
+    this.emailAccountIds = const [],
   });
 }
 
@@ -525,6 +529,45 @@ class ProviderConnection {
     required this.smsNumber,
     this.emailDomain = '',
   });
+}
+
+/// A sending mailbox connected by the signed-in LeadText user.
+/// Passwords and SMTP/IMAP credentials are deliberately never loaded here.
+class EmailMailbox {
+  final String id;
+  final String email;
+  final String displayName;
+  final String provider;
+  final String status;
+  final bool isDefault;
+  final int dailyLimit;
+  final int sentToday;
+
+  const EmailMailbox({
+    required this.id,
+    required this.email,
+    this.displayName = '',
+    this.provider = 'smtp',
+    this.status = 'connected',
+    this.isDefault = false,
+    this.dailyLimit = 100,
+    this.sentToday = 0,
+  });
+
+  bool get connected => status == 'connected';
+
+  factory EmailMailbox.fromMap(Map<String, dynamic> map) => EmailMailbox(
+        id: map['id']?.toString() ?? '',
+        email: map['email']?.toString() ?? '',
+        displayName: map['display_name']?.toString() ??
+            map['displayName']?.toString() ??
+            '',
+        provider: map['provider']?.toString() ?? 'smtp',
+        status: map['status']?.toString() ?? 'connected',
+        isDefault: map['is_default'] == true || map['isDefault'] == true,
+        dailyLimit: (map['daily_limit'] as num?)?.toInt() ?? 100,
+        sentToday: (map['sent_today'] as num?)?.toInt() ?? 0,
+      );
 }
 
 class LedgerEntry {
@@ -809,6 +852,12 @@ class AppState extends ChangeNotifier {
   String emailSenderEmail = '';
   String emailSenderName = '';
   bool emailProviderBusy = false;
+  final List<EmailMailbox> emailMailboxes = [];
+    // Brevo connection (separate from SMTP/IMAP)
+  bool brevoConnected = false;
+  bool brevoBusy = false;
+  String brevoSenderEmail = '';
+  String brevoSenderName = '';
   int _sending = 0; // in-flight sends (pauses background refresh)
   bool _polling = false;
   int _tickN = 0;
@@ -880,6 +929,7 @@ Future<void> bootstrap() async {
 
     unawaited(loadTelnyxStatus());
     unawaited(loadEmailProviderStatus());
+    unawaited(loadBrevoStatus());
 
     signedIn = true;
     tab = 0;
@@ -964,6 +1014,10 @@ Future<void> bootstrap() async {
     subscriptionActive = false;
     periodEnd = null;
     provider = null;
+    emailMailboxes.clear();
+    emailProviderConnected = false;
+    emailSenderEmail = '';
+    emailSenderName = '';
     telnyxBalance = 0;
     balanceCheckedAt = null;
     telnyxWebhookOk = false;
@@ -998,7 +1052,11 @@ Future<void> bootstrap() async {
     _run(() => SupabaseService.deleteContact(contact));
   }
 
- Future<String?> launchCampaign(Campaign campaign, List<String> addresses) async {
+ Future<String?> launchCampaign(
+    Campaign campaign,
+    List<String> addresses, {
+    List<String> emailAccountIds = const [],
+  }) async {
     campaign.status = CampaignStatus.sending;
     campaigns.removeWhere((c) => c.id == campaign.id);
     campaigns.insert(0, campaign);
@@ -1010,14 +1068,18 @@ Future<void> bootstrap() async {
       final isEmail = campaign.channel == Channel.email;
 
       final res = await Supabase.instance.client.functions.invoke(
-        isEmail ? 'send-email' : 'telnyx',
+        isEmail ? 'email-outreach' : 'telnyx',
         body: isEmail
             ? {
-                'to': addresses,
+                'action': 'create_campaign',
+                'campaign_id': campaign.id,
+                'name': campaign.name,
                 'subject': campaign.subject,
                 'message': campaign.message,
-                'fromName': campaign.fromName,
-                'fromEmail': campaign.fromEmail,
+                'from_name': campaign.fromName,
+                'addresses': addresses,
+                'email_account_ids': emailAccountIds,
+                'distribution': 'round_robin',
               }
             : {
                 'action': 'send_campaign',
@@ -1036,27 +1098,45 @@ Future<void> bootstrap() async {
         throw Exception(d['error'] ?? 'The campaign could not be started.');
       }
 
-     // --- Set campaign counts ---
-campaign.sentCount = addresses.length;
-campaign.delivered = 0;
-campaign.failed = 0;
-campaign.opened = 0;
-campaign.status = CampaignStatus.completed;
-
-// --- Save campaign statistics to Supabase ---
-await SupabaseService.updateCampaignStats(
-  id: campaign.id,
-  sent: campaign.sentCount,
-  delivered: campaign.delivered,
-  failed: campaign.failed,
-  opened: campaign.opened,
-  replies: campaign.replies,
-);
-
-await SupabaseService.setCampaignStatus(
-  campaign.id,
-  CampaignStatus.completed,
-);
+     // SMTP outreach is queued for the background worker. Do not report
+      // recipients as sent until the worker confirms each provider response.
+      if (isEmail) {
+        campaign.sentCount = 0;
+        campaign.delivered = 0;
+        campaign.failed = 0;
+        campaign.opened = 0;
+        campaign.status = CampaignStatus.sending;
+        await SupabaseService.updateCampaignStats(
+          id: campaign.id,
+          sent: 0,
+          delivered: 0,
+          failed: 0,
+          opened: 0,
+          replies: 0,
+        );
+        await SupabaseService.setCampaignStatus(
+          campaign.id,
+          CampaignStatus.sending,
+        );
+      } else {
+        campaign.sentCount = addresses.length;
+        campaign.delivered = 0;
+        campaign.failed = 0;
+        campaign.opened = 0;
+        campaign.status = CampaignStatus.completed;
+        await SupabaseService.updateCampaignStats(
+          id: campaign.id,
+          sent: campaign.sentCount,
+          delivered: campaign.delivered,
+          failed: campaign.failed,
+          opened: campaign.opened,
+          replies: campaign.replies,
+        );
+        await SupabaseService.setCampaignStatus(
+          campaign.id,
+          CampaignStatus.completed,
+        );
+      }
 
       return null;
     } catch (e) {
@@ -1114,7 +1194,7 @@ await SupabaseService.setCampaignStatus(
     return convo;
   }
 
-/// Sends the message through Telnyx (for SMS) or Supabase send-email (for Email).
+/// Sends SMS through Telnyx or one-to-one email through the default SMTP mailbox.
   Future<void> _deliver(Conversation convo, ChatMessage msg) async {
     _sending++;
     try {
@@ -1124,14 +1204,26 @@ await SupabaseService.setCampaignStatus(
 
       final isEmail = convo.channel == Channel.email;
 
+      final connectedMailboxes =
+          emailMailboxes.where((m) => m.connected).toList();
+      final defaultMailboxes =
+          connectedMailboxes.where((m) => m.isDefault).toList();
+      final defaultMailbox = defaultMailboxes.isNotEmpty
+          ? defaultMailboxes.first
+          : (connectedMailboxes.isNotEmpty ? connectedMailboxes.first : null);
+      if (isEmail && defaultMailbox == null) {
+        throw Exception('Connect an SMTP mailbox before sending email.');
+      }
       final res = await Supabase.instance.client.functions.invoke(
-        isEmail ? 'send-email' : 'telnyx',
+        isEmail ? 'email-outreach' : 'telnyx',
         body: isEmail
             ? {
+                'action': 'send_one',
+                'request_id': msg.id,
+                'email_account_id': defaultMailbox?.id,
                 'to': convo.address,
                 'subject': 'Reply from LeadText',
                 'message': msg.text,
-                'userId': Supabase.instance.client.auth.currentUser?.id,
               }
             : {
                 'action': 'send_sms',
@@ -1370,22 +1462,149 @@ await SupabaseService.setCampaignStatus(
     notifyListeners();
   }
 
-  // ---- Per-user Brevo email provider ----
+// ---- Multiple SMTP/IMAP mailboxes ----
   Future<void> loadEmailProviderStatus() async {
     try {
-      final res = await Supabase.instance.client.functions.invoke(
-        'email-provider-status',
-      );
-      final d = res.data is Map
-          ? Map<String, dynamic>.from(res.data as Map)
-          : <String, dynamic>{};
-      emailProviderConnected = d['connected'] == true;
-      emailSenderEmail = (d['senderEmail'] as String?) ?? '';
-      emailSenderName = (d['senderName'] as String?) ?? '';
+      final rows = await SupabaseService.fetchEmailMailboxes();
+      emailMailboxes
+        ..clear()
+        ..addAll(rows.map(EmailMailbox.fromMap).where((m) => m.id.isNotEmpty));
+      emailProviderConnected = emailMailboxes.any((m) => m.connected);
+
+      final preferred = emailMailboxes.where((m) => m.connected).toList();
+      final defaults = preferred.where((m) => m.isDefault).toList();
+      final sender = defaults.isNotEmpty
+          ? defaults.first
+          : (preferred.isNotEmpty ? preferred.first : null);
+      emailSenderEmail = sender?.email ?? '';
+      emailSenderName = sender?.displayName ?? '';
     } catch (e) {
-      debugPrint('Email provider status failed: $e');
+      debugPrint('Email mailbox list failed: $e');
     }
     notifyListeners();
+  }
+
+  // ---- Brevo connection (separate from SMTP/IMAP) ----
+  Future<void> loadBrevoStatus() async {
+    try {
+      final data = await SupabaseService.fetchBrevoStatus();
+      brevoConnected = data['connected'] == true;
+      brevoSenderEmail = data['senderEmail'] as String? ?? '';
+      brevoSenderName = data['senderName'] as String? ?? '';
+    } catch (e) {
+      debugPrint('Brevo status failed: $e');
+    }
+    notifyListeners();
+  }
+
+  Future<void> connectBrevoProvider({
+    required String apiKey,
+    required String senderEmail,
+    required String senderName,
+  }) async {
+    brevoBusy = true;
+    notifyListeners();
+    try {
+      await SupabaseService.connectBrevo(
+        apiKey: apiKey,
+        senderEmail: senderEmail,
+        senderName: senderName,
+      );
+      await loadBrevoStatus();
+      _toast('Brevo connected successfully.');
+    } catch (e) {
+      _toast(friendlyError(e));
+      rethrow;
+    } finally {
+      brevoBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> disconnectBrevoProvider() async {
+    brevoBusy = true;
+    notifyListeners();
+    try {
+      await SupabaseService.disconnectBrevo();
+      brevoConnected = false;
+      brevoSenderEmail = '';
+      brevoSenderName = '';
+      _toast('Brevo disconnected.');
+    } catch (e) {
+      _toast(friendlyError(e));
+    } finally {
+      brevoBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> connectSmtpMailbox({
+    required String email,
+    required String displayName,
+    required String smtpHost,
+    required int smtpPort,
+    required String smtpUsername,
+    required String smtpPassword,
+    required String imapHost,
+    required int imapPort,
+    required String imapUsername,
+    required String imapPassword,
+  }) async {
+    emailProviderBusy = true;
+    notifyListeners();
+    try {
+      await SupabaseService.manageEmailMailbox({
+        'action': 'connect_smtp',
+        'email': email,
+        'display_name': displayName,
+        'smtp_host': smtpHost,
+        'smtp_port': smtpPort,
+        'smtp_username': smtpUsername,
+        'smtp_password': smtpPassword,
+        'imap_host': imapHost,
+        'imap_port': imapPort,
+        'imap_username': imapUsername,
+        'imap_password': imapPassword,
+      });
+      await loadEmailProviderStatus();
+      _toast('Mailbox connected and saved.');
+    } catch (e) {
+      _toast(friendlyError(e));
+      rethrow;
+    } finally {
+      emailProviderBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> disconnectEmailMailbox(String mailboxId) async {
+    emailProviderBusy = true;
+    notifyListeners();
+    try {
+      await SupabaseService.manageEmailMailbox({
+        'action': 'disconnect',
+        'mailbox_id': mailboxId,
+      });
+      await loadEmailProviderStatus();
+      _toast('Mailbox disconnected.');
+    } catch (e) {
+      _toast(friendlyError(e));
+    } finally {
+      emailProviderBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setDefaultEmailMailbox(String mailboxId) async {
+    try {
+      await SupabaseService.manageEmailMailbox({
+        'action': 'set_default',
+        'mailbox_id': mailboxId,
+      });
+      await loadEmailProviderStatus();
+    } catch (e) {
+      _toast(friendlyError(e));
+    }
   }
 
   // ---- Telnyx (every call goes through the `telnyx` Edge Function) ----
@@ -2566,15 +2785,15 @@ bool requireSms(BuildContext context, Channel channel) {
 }
 
 /// Checks the provider required for the selected message channel.
-/// Email is sent through the user's connected Brevo integration; SMS currently
-/// uses the existing Telnyx integration. Twilio is not treated as available
+/// Email is sent through a connected SMTP mailbox; SMS uses the existing
+/// Telnyx integration. Twilio is not treated as available
 /// until its backend send and webhook integration is implemented and verified.
 bool requireProvider(BuildContext context, Channel channel) {
   final state = AppScope.of(context);
 
   if (channel == Channel.email) {
-    if (state.emailProviderConnected) return true;
-    showToast(context, 'Connect your Brevo email account to send email.');
+    if (state.emailMailboxes.any((mailbox) => mailbox.connected)) return true;
+    showToast(context, 'Connect an SMTP mailbox to send email.');
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const EmailProviderPage()),
     );
@@ -4191,7 +4410,27 @@ class _CallPageState extends State<CallPage> {
 class _ConversationPageState extends State<ConversationPage> {
   final controller = TextEditingController();
   final scroll = ScrollController();
+  File? selectedAttachment;
 
+  Future<void> _pickAttachment() async {
+    try {
+      final FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['jpg', 'jpeg', 'png', 'pdf', 'docx', 'txt'],
+      );
+
+      if (result != null && result.files.single.path != null) {
+        setState(() {
+          selectedAttachment = File(result.files.single.path!);
+        });
+        
+        if (!mounted) return; // <--- Add this line here
+        showToast(context, 'File attached: ${result.files.single.name}');
+      }
+    } catch (e) {
+      debugPrint("Error picking file: $e");
+    }
+  }
   @override
   void dispose() {
     controller.dispose();
@@ -4199,21 +4438,50 @@ class _ConversationPageState extends State<ConversationPage> {
     super.dispose();
   }
 
-  void _send(Conversation convo) {
+void _send(Conversation convo) async {
     final text = controller.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && selectedAttachment == null) return;
     if (!requireSms(context, convo.channel)) return;
     if (!requireSubscription(context)) return;
     if (!requireProvider(context, convo.channel)) return;
+
+    String? attachmentUrl;
+
+    if (selectedAttachment != null) {
+      try {
+        final fileName = '${DateTime.now().millisecondsSinceEpoch}_${selectedAttachment!.path.split('/').last}';
+        await Supabase.instance.client.storage
+            .from('chat-files')
+            .upload(fileName, selectedAttachment!);
+
+        attachmentUrl = Supabase.instance.client.storage
+            .from('chat-files')
+            .getPublicUrl(fileName);
+      } catch (e) {
+        if (!mounted) return;
+        showToast(context, 'Upload failed: $e');
+        return;
+      }
+    }
+
+    if (!mounted) return;
+
+    String finalMessage = text;
+    if (attachmentUrl != null) {
+      finalMessage = text.isEmpty ? attachmentUrl : '$text\n$attachmentUrl';
+    }
 
     AppScope.of(context).sendMessage(
       channel: convo.channel,
       address: convo.address,
       name: convo.name,
-      text: text,
+      text: finalMessage,
     );
+
     controller.clear();
-    setState(() {});
+    setState(() {
+      selectedAttachment = null;
+    });
   }
 
   void _makeCall(Conversation convo) {
@@ -4572,10 +4840,10 @@ class _ConversationPageState extends State<ConversationPage> {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   IconButton(
-                    tooltip: 'Attach',
-                    icon: const Icon(Icons.add_rounded, color: kMuted),
-                    onPressed: () => showToast(context, 'Attachments are coming soon.'),
-                  ),
+    tooltip: 'Attach',
+    icon: const Icon(Icons.add_rounded, color: kMuted),
+    onPressed: _pickAttachment, // <--- Calls our function!
+  ),
                   Expanded(
                     child: TextField(
                       controller: controller,
@@ -5376,6 +5644,8 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
   final messageController = TextEditingController();
   Channel channel = Channel.sms;
   bool _prefilled = false;
+  bool _mailboxesInitialized = false;
+  final Set<String> selectedEmailAccountIds = {};
 
   int get segments =>
       channel == Channel.sms ? smsSegments(messageController.text) : 1;
@@ -5383,14 +5653,21 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_prefilled) return;
-    _prefilled = true;
     final state = AppScope.of(context);
-    // Email campaigns use the sender verified in the connected Brevo account.
-    fromEmailController.text = state.emailSenderEmail;
-    final senderName = state.emailSenderName.trim();
-    final name = senderName.isNotEmpty ? senderName : state.userName;
-    if (name.isNotEmpty) fromNameController.text = name;
+    if (!_prefilled) {
+      _prefilled = true;
+      // Use the default mailbox as the initial sender identity.
+      fromEmailController.text = state.emailSenderEmail;
+      final senderName = state.emailSenderName.trim();
+      final name = senderName.isNotEmpty ? senderName : state.userName;
+      if (name.isNotEmpty) fromNameController.text = name;
+    }
+    if (!_mailboxesInitialized && state.emailMailboxes.isNotEmpty) {
+      selectedEmailAccountIds.addAll(
+        state.emailMailboxes.where((m) => m.connected).map((m) => m.id),
+      );
+      _mailboxesInitialized = true;
+    }
   }
 
   @override
@@ -5440,8 +5717,11 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
     }
     if (channel == Channel.email) {
       final state = AppScope.of(context);
-      return state.emailProviderConnected &&
-          isValidEmail(state.emailSenderEmail) &&
+      final connectedIds = state.emailMailboxes
+          .where((m) => m.connected)
+          .map((m) => m.id)
+          .toSet();
+      return selectedEmailAccountIds.any(connectedIds.contains) &&
           subjectController.text.trim().isNotEmpty &&
           fromNameController.text.trim().isNotEmpty;
     }
@@ -5457,6 +5737,9 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
       message: messageController.text.trim(),
       channel: channel,
       segments: segments,
+      emailAccountIds: channel == Channel.email
+          ? selectedEmailAccountIds.toList()
+          : const [],
     );
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => SelectContactsPage(draft: draft)),
@@ -5524,20 +5807,80 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
                 decoration: const InputDecoration(hintText: 'e.g. LeadText Team'),
               ),
               _gap(),
-              if (AppScope.of(context).emailProviderConnected)
-                AppCard(
-                  child: InfoBullet(
-                    icon: Icons.verified_outlined,
-                    text: 'Sending from ${AppScope.of(context).emailSenderEmail}. LeadText will use your connected Brevo sender automatically.',
-                  ),
-                )
-              else
-                const AppCard(
-                  child: InfoBullet(
-                    icon: Icons.warning_amber_rounded,
-                    text: 'Connect your Brevo account in Settings before creating an email campaign.',
-                  ),
-                ),
+              Builder(
+                builder: (context) {
+                  final mailboxes = AppScope.of(context)
+                      .emailMailboxes
+                      .where((m) => m.connected)
+                      .toList();
+                  if (mailboxes.isEmpty) {
+                    return AppCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const InfoBullet(
+                            icon: Icons.warning_amber_rounded,
+                            text: 'Connect at least one SMTP mailbox before creating an email campaign.',
+                          ),
+                          const SizedBox(height: 10),
+                          OutlinedButton.icon(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const EmailProviderPage()),
+                            ),
+                            icon: const Icon(Icons.add_rounded, size: 17),
+                            label: const Text('Connect mailbox'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  return AppCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Sending accounts', style: h2),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Select the mailboxes LeadText should distribute this campaign across. Each recipient is sent one email.',
+                          style: rowSub,
+                        ),
+                        const SizedBox(height: 8),
+                        for (final mailbox in mailboxes)
+                          CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            value: selectedEmailAccountIds.contains(mailbox.id),
+                            onChanged: (checked) => setState(() {
+                              if (checked == true) {
+                                selectedEmailAccountIds.add(mailbox.id);
+                              } else {
+                                selectedEmailAccountIds.remove(mailbox.id);
+                              }
+                            }),
+                            title: Text(mailbox.email, style: rowTitle),
+                            subtitle: Text(
+                              '${mailbox.provider.toUpperCase()} · ${mailbox.sentToday}/${mailbox.dailyLimit} sent today'
+                              '${mailbox.isDefault ? ' · Default' : ''}',
+                              style: rowSub,
+                            ),
+                            controlAffinity: ListTileControlAffinity.leading,
+                            activeColor: kAccent,
+                          ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const EmailProviderPage()),
+                            ),
+                            icon: const Icon(Icons.manage_accounts_outlined, size: 17),
+                            label: const Text('Manage mailboxes'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
               _gap(),
               const FieldLabel('Subject'),
               const SizedBox(height: 6),
@@ -6083,7 +6426,7 @@ class ReviewSendPage extends StatelessWidget {
         content: Text(
           'This will ${isSms ? 'text' : 'email'} '
           '${formatCount(recipients)} contacts '
-          '${isSms ? 'through your Telnyx account.' : 'through your Brevo account.'}'
+          '${isSms ? 'through your Telnyx account.' : 'distributed across ${draft.emailAccountIds.length} selected SMTP mailbox(es).'}'
           '${isSms ? ' Estimated Telnyx cost: ${formatMoney(estimate)}.' : ''}'
           '${short ? '\n\nHeads up: your Telnyx balance is ${formatMoney(state.telnyxBalance)}, which may not cover the whole campaign.' : ''}',
           style: bodyMuted,
@@ -6128,7 +6471,11 @@ class ReviewSendPage extends StatelessWidget {
         ),
       );
 
-    final error = await state.launchCampaign(campaign, addresses);
+    final error = await state.launchCampaign(
+      campaign,
+      addresses,
+      emailAccountIds: draft.emailAccountIds,
+    );
     if (error != null) {
       messenger
         ..hideCurrentSnackBar()
@@ -6144,7 +6491,7 @@ class ReviewSendPage extends StatelessWidget {
 
     // Check provider connection based on channel type
     final telnyxConnected = state.provider != null;
-    final brevoConnected = state.emailProviderConnected;
+    final emailConnected = state.emailMailboxes.any((m) => m.connected);
     final short = telnyxConnected && isSms && estimate > state.telnyxBalance;
 
     return Scaffold(
@@ -6205,14 +6552,19 @@ class ReviewSendPage extends StatelessWidget {
                   ] else ...[
                     const Divider(),
                     SummaryRow(
-                      label: 'From',
-                      value: '${draft.fromName} <${draft.fromEmail}>',
+                      label: 'From name',
+                      value: draft.fromName,
+                    ),
+                    const Divider(),
+                    SummaryRow(
+                      label: 'Sending accounts',
+                      value: '${draft.emailAccountIds.length} selected mailbox(es)',
                     ),
                   ],
                   const Divider(),
                   SummaryRow(
                     label: 'Billed by',
-                    value: isSms ? 'Your Telnyx account' : 'Your Brevo account',
+                    value: isSms ? 'Your Telnyx account' : 'Your connected email providers',
                   ),
                 ],
               ),
@@ -6224,10 +6576,10 @@ class ReviewSendPage extends StatelessWidget {
                 'can be delivered.',
                 style: TextStyle(fontSize: 12, color: kAmber, height: 1.4),
               ),
-            ] else if (!isSms && !brevoConnected) ...[
+            ] else if (!isSms && !emailConnected) ...[
               const SizedBox(height: 10),
               const Text(
-                'Brevo is not connected yet. Connect it in More so emails '
+                'No SMTP mailbox is connected yet. Connect one in More so emails '
                 'can be delivered.',
                 style: TextStyle(fontSize: 12, color: kAmber, height: 1.4),
               ),
@@ -8833,7 +9185,7 @@ class MoreTab extends StatelessWidget {
                   children: [
                     _MenuRow(
                       icon: Icons.mail_outline_rounded,
-                      title: 'Email provider · Brevo',
+                      title: 'Email mailboxes',
                       value: state.emailProviderConnected ? 'Connected' : 'Not connected',
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const EmailProviderPage()),
@@ -9076,7 +9428,7 @@ class TelnyxBalanceCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Per-user Brevo email connection
+// Multiple SMTP/IMAP email mailboxes
 // ---------------------------------------------------------------------------
 
 class EmailProviderPage extends StatefulWidget {
@@ -9087,76 +9439,170 @@ class EmailProviderPage extends StatefulWidget {
 }
 
 class _EmailProviderPageState extends State<EmailProviderPage> {
-  final apiKeyController = TextEditingController();
-  final senderEmailController = TextEditingController();
-  final senderNameController = TextEditingController();
-  bool busy = false;
+  final emailController = TextEditingController();
+  final displayNameController = TextEditingController();
+  final smtpHostController = TextEditingController();
+  final smtpPortController = TextEditingController(text: '587');
+  final smtpUsernameController = TextEditingController();
+  final smtpPasswordController = TextEditingController();
+  final imapHostController = TextEditingController();
+  final imapPortController = TextEditingController(text: '993');
+  final imapUsernameController = TextEditingController();
+  final imapPasswordController = TextEditingController();
+  final brevoApiKeyController = TextEditingController();
+  final brevoSenderEmailController = TextEditingController();
+  final brevoSenderNameController = TextEditingController();
+
+  bool showForm = false;
+  bool hideSmtpPassword = true;
+  bool hideImapPassword = true;
   String? error;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) AppScope.of(context).loadEmailProviderStatus();
+      if (mounted) {
+        final state = AppScope.of(context);
+        state.loadEmailProviderStatus();
+        state.loadBrevoStatus();
+      }
     });
   }
 
   @override
   void dispose() {
-    apiKeyController.dispose();
-    senderEmailController.dispose();
-    senderNameController.dispose();
+    emailController.dispose();
+    displayNameController.dispose();
+    smtpHostController.dispose();
+    smtpPortController.dispose();
+    smtpUsernameController.dispose();
+    smtpPasswordController.dispose();
+    imapHostController.dispose();
+    imapPortController.dispose();
+    imapUsernameController.dispose();
+    imapPasswordController.dispose();
+    brevoApiKeyController.dispose();
+    brevoSenderEmailController.dispose();
+    brevoSenderNameController.dispose();
     super.dispose();
   }
 
   Future<void> _connect() async {
-    final key = apiKeyController.text.trim();
-    final email = senderEmailController.text.trim();
-    if (key.isEmpty) {
-      setState(() => error = 'Paste your Brevo API key first.');
+    final email = emailController.text.trim().toLowerCase();
+    final smtpPort = int.tryParse(smtpPortController.text.trim());
+    final imapPort = int.tryParse(imapPortController.text.trim());
+
+    if (!isValidEmail(email)) {
+      setState(() => error = 'Enter a valid mailbox email address.');
       return;
     }
-    if (email.isNotEmpty && !isValidEmail(email)) {
-      setState(() => error = 'Enter a valid sender email address.');
+    if (smtpHostController.text.trim().isEmpty ||
+        smtpPort == null ||
+        smtpUsernameController.text.trim().isEmpty ||
+        smtpPasswordController.text.isEmpty) {
+      setState(() => error = 'Complete the SMTP host, port, username and password.');
+      return;
+    }
+    if (imapHostController.text.trim().isEmpty ||
+        imapPort == null ||
+        imapUsernameController.text.trim().isEmpty ||
+        imapPasswordController.text.isEmpty) {
+      setState(() => error = 'Complete the IMAP details so LeadText can receive replies.');
       return;
     }
 
-    final state = AppScope.of(context);
-    setState(() {
-      busy = true;
-      error = null;
-    });
+    setState(() => error = null);
     try {
-      final res = await Supabase.instance.client.functions.invoke(
-        'connect-email-provider',
-        body: {
-          'apiKey': key,
-          if (email.isNotEmpty) 'senderEmail': email,
-          if (senderNameController.text.trim().isNotEmpty)
-            'senderName': senderNameController.text.trim(),
-        },
+      await AppScope.of(context).connectSmtpMailbox(
+        email: email,
+        displayName: displayNameController.text.trim(),
+        smtpHost: smtpHostController.text.trim(),
+        smtpPort: smtpPort,
+        smtpUsername: smtpUsernameController.text.trim(),
+        smtpPassword: smtpPasswordController.text,
+        imapHost: imapHostController.text.trim(),
+        imapPort: imapPort,
+        imapUsername: imapUsernameController.text.trim(),
+        imapPassword: imapPasswordController.text,
       );
-      final data = res.data is Map
-          ? Map<String, dynamic>.from(res.data as Map)
-          : <String, dynamic>{};
-      if (data['success'] != true && data['connected'] != true) {
-        throw Exception(data['error'] ?? 'Could not connect Brevo.');
-      }
-      apiKeyController.clear();
-      await state.loadEmailProviderStatus();
-      if (mounted) showToast(context, 'Brevo connected to your LeadText account.');
+      if (!mounted) return;
+      smtpPasswordController.clear();
+      imapPasswordController.clear();
+      setState(() {
+        showForm = false;
+        emailController.clear();
+        displayNameController.clear();
+        smtpHostController.clear();
+        smtpPortController.text = '587';
+        smtpUsernameController.clear();
+        imapHostController.clear();
+        imapPortController.text = '993';
+        imapUsernameController.clear();
+      });
     } catch (e) {
       if (mounted) setState(() => error = friendlyError(e));
-    } finally {
-      if (mounted) setState(() => busy = false);
     }
+    }
+
+  Future<void> _connectBrevo() async {
+    final apiKey = brevoApiKeyController.text.trim();
+    final senderEmail = brevoSenderEmailController.text.trim();
+    final senderName = brevoSenderNameController.text.trim();
+
+    if (apiKey.isEmpty || !isValidEmail(senderEmail)) {
+      setState(() {
+        error = 'Enter a valid sender email and Brevo API key.';
+      });
+      return;
+    }
+
+    setState(() => error = null);
+
+    try {
+      await AppScope.of(context).connectBrevoProvider(
+        apiKey: apiKey,
+        senderEmail: senderEmail,
+        senderName: senderName,
+      );
+      brevoApiKeyController.clear();
+    } catch (_) {
+      // Error is already displayed by the connection method.
+    }
+  }
+
+  Widget _field(
+    String label,
+    TextEditingController controller, {
+    String? hint,
+    TextInputType? keyboardType,
+    bool obscure = false,
+    Widget? suffix,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        FieldLabel(label),
+        const SizedBox(height: 6),
+        TextField(
+          controller: controller,
+          obscureText: obscure,
+          keyboardType: keyboardType,
+          autocorrect: false,
+          enableSuggestions: !obscure,
+          decoration: InputDecoration(hintText: hint, suffixIcon: suffix),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final mailboxes = state.emailMailboxes;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Email provider')),
+      appBar: AppBar(title: const Text('Email mailboxes')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -9166,88 +9612,271 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
               children: [
                 Row(
                   children: [
-                    const Expanded(child: Text('Brevo account', style: h2)),
+                    const Expanded(
+                      child: Text('Brevo email integration', style: h2),
+                    ),
                     Pill(
-                      state.emailProviderConnected ? 'Connected' : 'Not connected',
-                      color: state.emailProviderConnected ? kGreen : kAmber,
+                      state.brevoConnected ? 'Connected' : 'Not connected',
+                      color: state.brevoConnected ? kGreen : kAmber,
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Connect your own Brevo account. Your API key is validated and encrypted by LeadText’s backend.',
-                  style: bodyMuted,
-                ),
-                if (state.emailProviderConnected) ...[
-                  const SizedBox(height: 16),
-                  SummaryRow(
-                    label: 'Sender email',
-                    value: state.emailSenderEmail.isEmpty
-                        ? 'Not set'
-                        : state.emailSenderEmail,
-                  ),
-                  if (state.emailSenderName.isNotEmpty) ...[
-                    const Divider(),
-                    SummaryRow(label: 'Sender name', value: state.emailSenderName),
-                  ],
+                if (state.brevoConnected) ...[
+                  Text(state.brevoSenderEmail, style: rowTitle),
+                  if (state.brevoSenderName.isNotEmpty)
+                    Text(state.brevoSenderName, style: rowSub),
                   const SizedBox(height: 12),
-                  const Text(
-                    'To change accounts, the backend needs a secure disconnect action. Until that is added, this connected account remains active.',
-                    style: rowSub,
+                  TextButton(
+                    onPressed: state.brevoBusy
+                        ? null
+                        : state.disconnectBrevoProvider,
+                    child: const Text(
+                      'Disconnect Brevo',
+                      style: TextStyle(color: kRed),
+                    ),
                   ),
                 ] else ...[
-                  const SizedBox(height: 18),
-                  const FieldLabel('Brevo API key'),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: apiKeyController,
-                    obscureText: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: const InputDecoration(hintText: 'Paste API key'),
+                  const Text(
+                    'Connect Brevo using your API key and verified sender details.',
+                    style: bodyMuted,
                   ),
                   const SizedBox(height: 14),
-                  const FieldLabel('Verified sender email'),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: senderEmailController,
+                  _field(
+                    'Brevo API key',
+                    brevoApiKeyController,
+                    obscure: true,
+                  ),
+                  const SizedBox(height: 12),
+                  _field(
+                    'Sender email',
+                    brevoSenderEmailController,
+                    hint: 'you@yourdomain.com',
                     keyboardType: TextInputType.emailAddress,
-                    autocorrect: false,
-                    decoration: const InputDecoration(hintText: 'you@yourdomain.com'),
                   ),
-                  const SizedBox(height: 14),
-                  const FieldLabel('Sender name (optional)'),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: senderNameController,
-                    decoration: const InputDecoration(hintText: 'Your business name'),
+                  const SizedBox(height: 12),
+                  _field(
+                    'Sender name',
+                    brevoSenderNameController,
+                    hint: 'Your business name',
                   ),
-                  if (error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(error!, style: const TextStyle(color: kRed, fontSize: 12)),
-                  ],
                   const SizedBox(height: 16),
-                  FilledButton(
-                    onPressed: busy ? null : _connect,
-                    child: busy
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text('Connect Brevo'),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: state.brevoBusy ? null : _connectBrevo,
+                      child: state.brevoBusy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Connect Brevo'),
+                    ),
                   ),
                 ],
               ],
             ),
           ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              const Expanded(child: Text('Connected accounts', style: h2)),
+              Pill(
+                '${mailboxes.where((m) => m.connected).length} connected',
+                color: mailboxes.any((m) => m.connected) ? kGreen : kAmber,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Connect multiple mailboxes. For a campaign, LeadText distributes recipients across the accounts you select; each recipient receives one email, not a duplicate from every mailbox.',
+            style: bodyMuted,
+          ),
+          const SizedBox(height: 14),
+          if (mailboxes.isEmpty)
+            const AppCard(
+              child: InfoBullet(
+                icon: Icons.mail_outline_rounded,
+                text: 'No mailboxes connected yet. Add your first SMTP/IMAP mailbox below.',
+              ),
+            )
+          else
+            ...mailboxes.map((mailbox) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: AppCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.mark_email_read_outlined, color: kAccent),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(mailbox.email, style: rowTitle),
+                                  Text(
+                                    '${mailbox.provider.toUpperCase()} · ${mailbox.sentToday}/${mailbox.dailyLimit} sent today',
+                                    style: rowSub,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Pill(
+                              mailbox.connected ? 'Connected' : mailbox.status,
+                              color: mailbox.connected ? kGreen : kAmber,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            if (!mailbox.isDefault)
+                              TextButton(
+                                onPressed: state.emailProviderBusy
+                                    ? null
+                                    : () => state.setDefaultEmailMailbox(mailbox.id),
+                                child: const Text('Set as default'),
+                              )
+                            else
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                child: Text(
+                                  'Default sender',
+                                  style: TextStyle(
+                                    color: kGreen,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            const Spacer(),
+                            TextButton(
+                              onPressed: state.emailProviderBusy
+                                  ? null
+                                  : () => state.disconnectEmailMailbox(mailbox.id),
+                              child: const Text(
+                                'Disconnect',
+                                style: TextStyle(color: kRed),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                )),
+          const SizedBox(height: 8),
+          if (!showForm)
+            FilledButton.icon(
+              onPressed: () => setState(() {
+                error = null;
+                showForm = true;
+              }),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add another mailbox'),
+            )
+          else
+            AppCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(child: Text('Connect SMTP / IMAP', style: h2)),
+                      IconButton(
+                        onPressed: () => setState(() => showForm = false),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const Text(
+                    'Use the server details supplied by your mailbox provider. Credentials are sent to LeadText’s backend for encrypted storage, never saved in this Flutter screen.',
+                    style: bodyMuted,
+                  ),
+                  const SizedBox(height: 16),
+                  _field('Email address', emailController,
+                      hint: 'you@yourdomain.com',
+                      keyboardType: TextInputType.emailAddress),
+                  const SizedBox(height: 12),
+                  _field('Sender name (optional)', displayNameController,
+                      hint: 'Your name or business'),
+                  const SizedBox(height: 18),
+                  const Text('Outgoing mail (SMTP)', style: h2),
+                  const SizedBox(height: 10),
+                  _field('SMTP host', smtpHostController,
+                      hint: 'smtp.yourprovider.com'),
+                  const SizedBox(height: 12),
+                  _field('SMTP port', smtpPortController,
+                      hint: '587', keyboardType: TextInputType.number),
+                  const SizedBox(height: 12),
+                  _field('SMTP username', smtpUsernameController,
+                      hint: 'Usually your full email address'),
+                  const SizedBox(height: 12),
+                  _field('SMTP password / app password', smtpPasswordController,
+                      obscure: hideSmtpPassword,
+                      suffix: IconButton(
+                        onPressed: () => setState(
+                            () => hideSmtpPassword = !hideSmtpPassword),
+                        icon: Icon(hideSmtpPassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined),
+                      )),
+                  const SizedBox(height: 18),
+                  const Text('Incoming mail (IMAP)', style: h2),
+                  const SizedBox(height: 10),
+                  _field('IMAP host', imapHostController,
+                      hint: 'imap.yourprovider.com'),
+                  const SizedBox(height: 12),
+                  _field('IMAP port', imapPortController,
+                      hint: '993', keyboardType: TextInputType.number),
+                  const SizedBox(height: 12),
+                  _field('IMAP username', imapUsernameController,
+                      hint: 'Usually your full email address'),
+                  const SizedBox(height: 12),
+                  _field('IMAP password / app password', imapPasswordController,
+                      obscure: hideImapPassword,
+                      suffix: IconButton(
+                        onPressed: () => setState(
+                            () => hideImapPassword = !hideImapPassword),
+                        icon: Icon(hideImapPassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined),
+                      )),
+                  if (error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(error!,
+                        style: const TextStyle(color: kRed, fontSize: 12)),
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: state.emailProviderBusy ? null : _connect,
+                      child: state.emailProviderBusy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Test and connect mailbox'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           const SizedBox(height: 14),
           const InfoBullet(
-            icon: Icons.lock_outline_rounded,
-            text: 'Never paste your API key into a chat or public place. Use a verified sender address in Brevo.',
+            icon: Icons.info_outline_rounded,
+            text: 'SMTP sends email; IMAP lets LeadText check replies. Some providers require app passwords, domain authentication or separate SMTP/IMAP access. Connecting an account does not override provider sending policies.',
           ),
         ],
       ),

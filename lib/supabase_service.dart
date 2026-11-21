@@ -434,6 +434,117 @@ class SupabaseService {
   }
 
   // -------------------------------------------------------------------------
+  // Email mailboxes (SMTP/IMAP)
+  // -------------------------------------------------------------------------
+
+  static Future<List<Map<String, dynamic>>> fetchEmailMailboxes() async {
+    final response = await _db.functions.invoke(
+      'email-mailboxes',
+      body: {'action': 'list'},
+    );
+    final data = response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : <String, dynamic>{};
+    if (response.status < 200 || response.status >= 300 ||
+        data['success'] != true) {
+      throw Exception(data['error'] ?? 'Could not load email mailboxes.');
+    }
+    final accounts = data['accounts'];
+    if (accounts is! List) return [];
+    return accounts
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
+  static Future<Map<String, dynamic>> manageEmailMailbox(
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _db.functions.invoke(
+      'email-mailboxes',
+      body: payload,
+    );
+    final data = response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : <String, dynamic>{};
+    if (response.status < 200 || response.status >= 300 ||
+        data['success'] != true) {
+      throw Exception(data['error'] ?? 'Email mailbox request failed.');
+    }
+    return data;
+  }
+
+  
+  // -------------------------------------------------------------------------
+  // Brevo email provider
+  // -------------------------------------------------------------------------
+
+  static Future<Map<String, dynamic>> fetchBrevoStatus() async {
+    final response = await _db.functions.invoke(
+      'email-provider-status',
+      body: {},
+    );
+
+    final data = response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : <String, dynamic>{};
+
+    if (response.status < 200 ||
+        response.status >= 300 ||
+        data.containsKey('error')) {
+      throw Exception(
+        data['error'] ?? 'Could not check Brevo connection.',
+      );
+    }
+
+    return data;
+  }
+
+  static Future<Map<String, dynamic>> connectBrevo({
+    required String apiKey,
+    required String senderEmail,
+    required String senderName,
+  }) async {
+    final response = await _db.functions.invoke(
+      'connect-email-provider',
+      body: {
+        'action': 'connect',
+        'apiKey': apiKey,
+        'senderEmail': senderEmail,
+        'senderName': senderName,
+      },
+    );
+
+    final data = response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : <String, dynamic>{};
+
+    if (response.status < 200 ||
+        response.status >= 300 ||
+        data['success'] != true) {
+      throw Exception(data['error'] ?? 'Could not connect Brevo.');
+    }
+
+    return data;
+  }
+
+  static Future<void> disconnectBrevo() async {
+    final response = await _db.functions.invoke(
+      'connect-email-provider',
+      body: {'action': 'disconnect'},
+    );
+
+    final data = response.data is Map
+        ? Map<String, dynamic>.from(response.data as Map)
+        : <String, dynamic>{};
+
+    if (response.status < 200 ||
+        response.status >= 300 ||
+        data['success'] != true) {
+      throw Exception(data['error'] ?? 'Could not disconnect Brevo.');
+    }
+  }
+// -------------------------------------------------------------------------
   // Edge Functions / Email Sending
   // -------------------------------------------------------------------------
 
