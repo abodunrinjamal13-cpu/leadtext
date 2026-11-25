@@ -21,8 +21,6 @@ Future<void> main() async {
   runApp(const LeadTextApp());
 }
 
-
-
 /// Launch switch. While false, LeadMarket and LeadCoins are hidden from the
 /// app (Contacts takes the tab) and the home screen shows a small "Soon"
 /// banner. Flip to true later and everything comes back.
@@ -63,7 +61,8 @@ const TextStyle h2 = TextStyle(
   letterSpacing: -0.2,
 );
 
-const TextStyle bodyMuted = TextStyle(fontSize: 13, color: kMuted, height: 1.5, letterSpacing: 0.05);
+const TextStyle bodyMuted =
+    TextStyle(fontSize: 13, color: kMuted, height: 1.5, letterSpacing: 0.05);
 
 const TextStyle rowTitle = TextStyle(
   fontSize: 13.5,
@@ -71,7 +70,8 @@ const TextStyle rowTitle = TextStyle(
   color: kText,
 );
 
-const TextStyle rowSub = TextStyle(fontSize: 11.5, color: kMuted, height: 1.4, letterSpacing: 0.05);
+const TextStyle rowSub =
+    TextStyle(fontSize: 11.5, color: kMuted, height: 1.4, letterSpacing: 0.05);
 
 void showToast(BuildContext context, String message) {
   final messenger = ScaffoldMessenger.of(context);
@@ -123,8 +123,18 @@ String formatMoney(double amount) => '\$${amount.toStringAsFixed(2)}';
 String formatCoins(int n) => '${formatCount(n)} LC';
 
 const List<String> _monthNames = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String formatDate(DateTime d) =>
@@ -223,9 +233,11 @@ class _LogoPainter extends CustomPainter {
     final body = Path.combine(PathOperation.union, bubble, tail);
 
     final bar1 = Path()
-      ..addRRect(RRect.fromLTRBR(398, 372, 470, 592, const Radius.circular(16)));
+      ..addRRect(
+          RRect.fromLTRBR(398, 372, 470, 592, const Radius.circular(16)));
     final bar2 = Path()
-      ..addRRect(RRect.fromLTRBR(398, 520, 630, 592, const Radius.circular(16)));
+      ..addRRect(
+          RRect.fromLTRBR(398, 520, 630, 592, const Radius.circular(16)));
     final dot = Path()
       ..addOval(Rect.fromCircle(center: const Offset(594, 416), radius: 36));
     final glyph = Path.combine(
@@ -397,13 +409,14 @@ class Campaign {
 
   /// Messages accepted by the provider (includes later delivered/opened/replied).
   int get sent => sentCount > delivered ? sentCount : delivered;
+
   /// Recipients with a final send outcome; useful for campaign progress.
   int get processed => sent + failed;
   bool get isActive => status != CampaignStatus.completed;
-  double get progress => recipients == 0
-      ? 0
-      : (processed / recipients).clamp(0.0, 1.0).toDouble();
+  double get progress =>
+      recipients == 0 ? 0 : (processed / recipients).clamp(0.0, 1.0).toDouble();
 }
+
 /// Everything entered on the "New campaign" screen, passed along the flow.
 class CampaignDraft {
   final String name;
@@ -539,6 +552,7 @@ class EmailMailbox {
   final String displayName;
   final String provider;
   final String status;
+  final String imapHost;
   final bool isDefault;
   final int dailyLimit;
   final int sentToday;
@@ -549,6 +563,7 @@ class EmailMailbox {
     this.displayName = '',
     this.provider = 'smtp',
     this.status = 'connected',
+    this.imapHost = '',
     this.isDefault = false,
     this.dailyLimit = 100,
     this.sentToday = 0,
@@ -564,6 +579,7 @@ class EmailMailbox {
             '',
         provider: map['provider']?.toString() ?? 'smtp',
         status: map['status']?.toString() ?? 'connected',
+        imapHost: map['imap_host']?.toString() ?? '',
         isDefault: map['is_default'] == true || map['isDefault'] == true,
         dailyLimit: (map['daily_limit'] as num?)?.toInt() ?? 100,
         sentToday: (map['sent_today'] as num?)?.toInt() ?? 0,
@@ -829,6 +845,7 @@ class AppState extends ChangeNotifier {
   void notify() {
     notifyListeners();
   }
+
   Timer? _timer;
   final Random _rnd = Random();
 
@@ -853,11 +870,6 @@ class AppState extends ChangeNotifier {
   String emailSenderName = '';
   bool emailProviderBusy = false;
   final List<EmailMailbox> emailMailboxes = [];
-    // Brevo connection (separate from SMTP/IMAP)
-  bool brevoConnected = false;
-  bool brevoBusy = false;
-  String brevoSenderEmail = '';
-  String brevoSenderName = '';
   int _sending = 0; // in-flight sends (pauses background refresh)
   bool _polling = false;
   int _tickN = 0;
@@ -883,65 +895,64 @@ class AppState extends ChangeNotifier {
     });
   }
 
-Future<void> bootstrap() async {
-  final user = SupabaseService.currentUser;
-  if (user == null) return;
+  Future<void> bootstrap() async {
+    final user = SupabaseService.currentUser;
+    if (user == null) return;
 
-  loading = true;
-  notifyListeners();
-
-  try {
-    final p = await SupabaseService.fetchProfile();
-
-    userEmail = (p?['email'] as String?) ?? user.email ?? '';
-    final fullName = ((p?['full_name'] as String?) ?? '').trim();
-    userName = fullName.isNotEmpty ? fullName : _nameFromEmail(userEmail);
-    coins = (p?['coins'] as num?)?.toInt() ?? 0;
-
-    final loadedContacts = await SupabaseService.fetchContacts();
-    final loadedCampaigns = await SupabaseService.fetchCampaigns();
-
-    // DEBUG: Check whether campaigns are being loaded from Supabase.
-    debugPrint('========== CAMPAIGN DEBUG ==========');
-    debugPrint('CAMPAIGNS LOADED: ${loadedCampaigns.length}');
-
-    for (final c in loadedCampaigns) {
-      debugPrint('${c.name} | ${c.id} | ${c.status}');
-    }
-
-    debugPrint('====================================');
-
-    final loadedConvos = await SupabaseService.fetchConversations();
-
-    contacts
-      ..clear()
-      ..addAll(loadedContacts);
-
-    campaigns
-      ..clear()
-      ..addAll(loadedCampaigns);
-
-    conversations
-      ..clear()
-      ..addAll(loadedConvos);
-
-    await refreshBilling();
-
-    unawaited(loadTelnyxStatus());
-    unawaited(loadEmailProviderStatus());
-    unawaited(loadBrevoStatus());
-
-    signedIn = true;
-    tab = 0;
-    syncError = null;
-  } catch (e) {
-    debugPrint('Bootstrap failed: $e');
-    syncError = e.toString();
-  } finally {
-    loading = false;
+    loading = true;
     notifyListeners();
+
+    try {
+      final p = await SupabaseService.fetchProfile();
+
+      userEmail = (p?['email'] as String?) ?? user.email ?? '';
+      final fullName = ((p?['full_name'] as String?) ?? '').trim();
+      userName = fullName.isNotEmpty ? fullName : _nameFromEmail(userEmail);
+      coins = (p?['coins'] as num?)?.toInt() ?? 0;
+
+      final loadedContacts = await SupabaseService.fetchContacts();
+      final loadedCampaigns = await SupabaseService.fetchCampaigns();
+
+      // DEBUG: Check whether campaigns are being loaded from Supabase.
+      debugPrint('========== CAMPAIGN DEBUG ==========');
+      debugPrint('CAMPAIGNS LOADED: ${loadedCampaigns.length}');
+
+      for (final c in loadedCampaigns) {
+        debugPrint('${c.name} | ${c.id} | ${c.status}');
+      }
+
+      debugPrint('====================================');
+
+      final loadedConvos = await SupabaseService.fetchConversations();
+
+      contacts
+        ..clear()
+        ..addAll(loadedContacts);
+
+      campaigns
+        ..clear()
+        ..addAll(loadedCampaigns);
+
+      conversations
+        ..clear()
+        ..addAll(loadedConvos);
+
+      await refreshBilling();
+
+      unawaited(loadTelnyxStatus());
+      unawaited(loadEmailProviderStatus());
+
+      signedIn = true;
+      tab = 0;
+      syncError = null;
+    } catch (e) {
+      debugPrint('Bootstrap failed: $e');
+      syncError = e.toString();
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
   }
-}
 
   // ---- derived ----
   int get unreadCount => conversations.where((c) => c.unread).length;
@@ -1052,7 +1063,7 @@ Future<void> bootstrap() async {
     _run(() => SupabaseService.deleteContact(contact));
   }
 
- Future<String?> launchCampaign(
+  Future<String?> launchCampaign(
     Campaign campaign,
     List<String> addresses, {
     List<String> emailAccountIds = const [],
@@ -1098,7 +1109,7 @@ Future<void> bootstrap() async {
         throw Exception(d['error'] ?? 'The campaign could not be started.');
       }
 
-     // SMTP outreach is queued for the background worker. Do not report
+      // SMTP outreach is queued for the background worker. Do not report
       // recipients as sent until the worker confirms each provider response.
       if (isEmail) {
         campaign.sentCount = 0;
@@ -1143,7 +1154,8 @@ Future<void> bootstrap() async {
       campaign.failed = campaign.recipients;
       campaign.status = CampaignStatus.completed;
       try {
-        await SupabaseService.setCampaignStatus(campaign.id, CampaignStatus.completed);
+        await SupabaseService.setCampaignStatus(
+            campaign.id, CampaignStatus.completed);
       } catch (persistError) {
         debugPrint('Could not persist failed campaign status: $persistError');
       }
@@ -1194,66 +1206,88 @@ Future<void> bootstrap() async {
     return convo;
   }
 
-/// Sends SMS through Telnyx or one-to-one email through the default SMTP mailbox.
+  /// Sends SMS through Telnyx or one-to-one email through the default SMTP mailbox.
   Future<void> _deliver(Conversation convo, ChatMessage msg) async {
     _sending++;
     try {
-      // Persist first so the conversation/message survives logout or app restart.
-      // The database message ID is a UUID generated by ChatMessage.
       await SupabaseService.saveOutboundMessage(convo, msg);
 
       final isEmail = convo.channel == Channel.email;
-
       final connectedMailboxes =
           emailMailboxes.where((m) => m.connected).toList();
-      final defaultMailboxes =
-          connectedMailboxes.where((m) => m.isDefault).toList();
-      final defaultMailbox = defaultMailboxes.isNotEmpty
-          ? defaultMailboxes.first
-          : (connectedMailboxes.isNotEmpty ? connectedMailboxes.first : null);
-      if (isEmail && defaultMailbox == null) {
-        throw Exception('Connect an SMTP mailbox before sending email.');
-      }
-      final res = await Supabase.instance.client.functions.invoke(
-        isEmail ? 'email-outreach' : 'telnyx',
-        body: isEmail
-            ? {
-                'action': 'send_one',
-                'request_id': msg.id,
-                'email_account_id': defaultMailbox?.id,
-                'to': convo.address,
-                'subject': 'Reply from LeadText',
-                'message': msg.text,
-              }
-            : {
-                'action': 'send_sms',
-                'to': convo.address,
-                'text': msg.text,
-                'name': convo.name,
-                'conversation_id': convo.id,
-                'message_id': msg.id,
-              },
-      );
 
-      final d = res.data is Map
-          ? Map<String, dynamic>.from(res.data as Map)
-          : <String, dynamic>{};
-      final ok = d['success'] == true;
-      msg.status = ok ? MessageStatus.sent : MessageStatus.failed;
-      // Keep the same UUID in memory and in Supabase. Provider message IDs
-      // belong in provider/log fields, not in messages.id.
-      await SupabaseService.updateMessageStatus(
-        msg.id,
-        ok ? 'sent' : 'failed',
-      );
-      if (!ok) _toast(d['error']?.toString() ?? 'The message could not be sent.');
+      if (isEmail) {
+        final defaultMailboxes =
+            connectedMailboxes.where((m) => m.isDefault).toList();
+
+        final defaultMailbox = defaultMailboxes.isNotEmpty
+            ? defaultMailboxes.first
+            : (connectedMailboxes.isNotEmpty ? connectedMailboxes.first : null);
+
+        if (defaultMailbox == null) {
+          throw Exception('Connect an SMTP mailbox before sending email.');
+        }
+
+        final res = await Supabase.instance.client.functions.invoke(
+          'email-outreach',
+          body: {
+            'action': 'send_one',
+            'request_id': msg.id,
+            'email_account_id': defaultMailbox.id,
+            'to': convo.address,
+            'subject': 'Reply from LeadText',
+            'message': msg.text,
+          },
+        );
+
+        final d = res.data is Map
+            ? Map<String, dynamic>.from(res.data as Map)
+            : <String, dynamic>{};
+
+        final ok = d['success'] == true;
+
+        msg.status = ok ? MessageStatus.sent : MessageStatus.failed;
+        await SupabaseService.updateMessageStatus(
+          msg.id,
+          ok ? 'sent' : 'failed',
+        );
+
+        if (!ok) {
+          _toast(d['error']?.toString() ?? 'The email could not be sent.');
+        }
+      } else {
+        final res = await Supabase.instance.client.functions.invoke(
+          'telnyx',
+          body: {
+            'action': 'send_sms',
+            'to': convo.address,
+            'text': msg.text,
+            'name': convo.name,
+            'conversation_id': convo.id,
+            'message_id': msg.id,
+          },
+        );
+
+        final d = res.data is Map
+            ? Map<String, dynamic>.from(res.data as Map)
+            : <String, dynamic>{};
+
+        final ok = d['success'] == true;
+        msg.status = ok ? MessageStatus.sent : MessageStatus.failed;
+        await SupabaseService.updateMessageStatus(
+          msg.id,
+          ok ? 'sent' : 'failed',
+        );
+
+        if (!ok) {
+          _toast(d['error']?.toString() ?? 'The message could not be sent.');
+        }
+      }
     } catch (e) {
       msg.status = MessageStatus.failed;
       try {
         await SupabaseService.updateMessageStatus(msg.id, 'failed');
-      } catch (_) {
-        // Preserve the original send/persistence error for the user.
-      }
+      } catch (_) {}
       _toast(friendlyError(e));
     } finally {
       _sending--;
@@ -1287,7 +1321,8 @@ Future<void> bootstrap() async {
     _run(() => SupabaseService.deleteMessage(m.id));
   }
 
-  void editConversationContact(Conversation convo, String name, String address) {
+  void editConversationContact(
+      Conversation convo, String name, String address) {
     convo.name = name;
     convo.address = address;
     notifyListeners();
@@ -1484,60 +1519,6 @@ Future<void> bootstrap() async {
     notifyListeners();
   }
 
-  // ---- Brevo connection (separate from SMTP/IMAP) ----
-  Future<void> loadBrevoStatus() async {
-    try {
-      final data = await SupabaseService.fetchBrevoStatus();
-      brevoConnected = data['connected'] == true;
-      brevoSenderEmail = data['senderEmail'] as String? ?? '';
-      brevoSenderName = data['senderName'] as String? ?? '';
-    } catch (e) {
-      debugPrint('Brevo status failed: $e');
-    }
-    notifyListeners();
-  }
-
-  Future<void> connectBrevoProvider({
-    required String apiKey,
-    required String senderEmail,
-    required String senderName,
-  }) async {
-    brevoBusy = true;
-    notifyListeners();
-    try {
-      await SupabaseService.connectBrevo(
-        apiKey: apiKey,
-        senderEmail: senderEmail,
-        senderName: senderName,
-      );
-      await loadBrevoStatus();
-      _toast('Brevo connected successfully.');
-    } catch (e) {
-      _toast(friendlyError(e));
-      rethrow;
-    } finally {
-      brevoBusy = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> disconnectBrevoProvider() async {
-    brevoBusy = true;
-    notifyListeners();
-    try {
-      await SupabaseService.disconnectBrevo();
-      brevoConnected = false;
-      brevoSenderEmail = '';
-      brevoSenderName = '';
-      _toast('Brevo disconnected.');
-    } catch (e) {
-      _toast(friendlyError(e));
-    } finally {
-      brevoBusy = false;
-      notifyListeners();
-    }
-  }
-
   Future<void> connectSmtpMailbox({
     required String email,
     required String displayName,
@@ -1545,10 +1526,10 @@ Future<void> bootstrap() async {
     required int smtpPort,
     required String smtpUsername,
     required String smtpPassword,
-    required String imapHost,
-    required int imapPort,
-    required String imapUsername,
-    required String imapPassword,
+    String? imapHost,
+    int? imapPort,
+    String? imapUsername,
+    String? imapPassword,
   }) async {
     emailProviderBusy = true;
     notifyListeners();
@@ -1568,6 +1549,35 @@ Future<void> bootstrap() async {
       });
       await loadEmailProviderStatus();
       _toast('Mailbox connected and saved.');
+    } catch (e) {
+      _toast(friendlyError(e));
+      rethrow;
+    } finally {
+      emailProviderBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> connectImapMailbox({
+    required String mailboxId,
+    required String imapHost,
+    required int imapPort,
+    required String imapUsername,
+    required String imapPassword,
+  }) async {
+    emailProviderBusy = true;
+    notifyListeners();
+    try {
+      await SupabaseService.manageEmailMailbox({
+        'action': 'connect_imap',
+        'mailbox_id': mailboxId,
+        'imap_host': imapHost,
+        'imap_port': imapPort,
+        'imap_username': imapUsername,
+        'imap_password': imapPassword,
+      });
+      await loadEmailProviderStatus();
+      _toast('IMAP connected successfully.');
     } catch (e) {
       _toast(friendlyError(e));
       rethrow;
@@ -1681,7 +1691,8 @@ Future<void> bootstrap() async {
     try {
       final fresh = await SupabaseService.fetchConversations();
       final ids = {for (final c in fresh) c.id};
-      final localOnly = conversations.where((c) => !ids.contains(c.id)).toList();
+      final localOnly =
+          conversations.where((c) => !ids.contains(c.id)).toList();
       conversations
         ..clear()
         ..addAll([...localOnly, ...fresh]);
@@ -1729,7 +1740,8 @@ Future<void> bootstrap() async {
       if (_rnd.nextInt(3) == 0) c.replies += 1;
       if (c.processed >= c.recipients) {
         c.status = CampaignStatus.completed;
-        _run(() => SupabaseService.setCampaignStatus(c.id, CampaignStatus.completed));
+        _run(() =>
+            SupabaseService.setCampaignStatus(c.id, CampaignStatus.completed));
       }
     }
     if (changed) notifyListeners();
@@ -2044,16 +2056,17 @@ class _LeadTextAppState extends State<LeadTextApp> {
         switchTheme: SwitchThemeData(
           thumbColor: WidgetStateProperty.all(Colors.white),
           trackColor: WidgetStateProperty.resolveWith(
-            (s) => s.contains(WidgetState.selected) ? kAccent : const Color(0xFFCBD5E1),
+            (s) => s.contains(WidgetState.selected)
+                ? kAccent
+                : const Color(0xFFCBD5E1),
           ),
           trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
         ),
       ),
       builder: (context, child) {
         final mq = MediaQuery.of(context);
-        final scale = (mq.textScaler.scale(1.0) * kTextScale)
-            .clamp(0.8, 1.4)
-            .toDouble();
+        final scale =
+            (mq.textScaler.scale(1.0) * kTextScale).clamp(0.8, 1.4).toDouble();
         return MediaQuery(
           data: mq.copyWith(textScaler: TextScaler.linear(scale)),
           child: AppScope(state: state, child: child!),
@@ -2142,8 +2155,8 @@ class _SplashPageState extends State<SplashPage>
     duration: const Duration(milliseconds: 2400),
   )..forward();
 
-  late final Animation<double> _logoScale = Tween<double>(begin: 0.7, end: 1)
-      .animate(CurvedAnimation(
+  late final Animation<double> _logoScale =
+      Tween<double>(begin: 0.7, end: 1).animate(CurvedAnimation(
     parent: _c,
     curve: const Interval(0.0, 0.4, curve: Curves.easeOutBack),
   ));
@@ -2276,8 +2289,10 @@ class _SplashPageState extends State<SplashPage>
                             letterSpacing: -1.1,
                           ),
                           children: [
-                            TextSpan(text: 'Lead', style: TextStyle(color: kText)),
-                            TextSpan(text: 'Text', style: TextStyle(color: kAccent)),
+                            TextSpan(
+                                text: 'Lead', style: TextStyle(color: kText)),
+                            TextSpan(
+                                text: 'Text', style: TextStyle(color: kAccent)),
                           ],
                         ),
                       ),
@@ -2288,7 +2303,8 @@ class _SplashPageState extends State<SplashPage>
                     opacity: _tagFade,
                     child: const Text(
                       'SMS & email outreach, made simple.',
-                      style: TextStyle(fontSize: 13, color: kMuted, letterSpacing: 0.1),
+                      style: TextStyle(
+                          fontSize: 13, color: kMuted, letterSpacing: 0.1),
                     ),
                   ),
                   const Spacer(flex: 4),
@@ -2309,7 +2325,8 @@ class _SplashPageState extends State<SplashPage>
                     opacity: _footFade,
                     child: const Text(
                       'A JML Product',
-                      style: TextStyle(fontSize: 11.5, color: kFaint, letterSpacing: 0.3),
+                      style: TextStyle(
+                          fontSize: 11.5, color: kFaint, letterSpacing: 0.3),
                     ),
                   ),
                   const SizedBox(height: 22),
@@ -2451,7 +2468,8 @@ class PageHeader extends StatelessWidget {
   final String? subtitle;
   final Widget? trailing;
 
-  const PageHeader({super.key, required this.title, this.subtitle, this.trailing});
+  const PageHeader(
+      {super.key, required this.title, this.subtitle, this.trailing});
 
   @override
   Widget build(BuildContext context) {
@@ -2792,7 +2810,11 @@ bool requireProvider(BuildContext context, Channel channel) {
   final state = AppScope.of(context);
 
   if (channel == Channel.email) {
-    if (state.emailMailboxes.any((mailbox) => mailbox.connected)) return true;
+    final smtpConnected =
+        state.emailMailboxes.any((mailbox) => mailbox.connected);
+
+    if (smtpConnected) return true;
+
     showToast(context, 'Connect an SMTP mailbox to send email.');
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const EmailProviderPage()),
@@ -2818,7 +2840,8 @@ Future<void> addTelnyxFunds(BuildContext context) async {
     );
   } catch (_) {}
   if (opened) return;
-  await Clipboard.setData(const ClipboardData(text: 'https://portal.telnyx.com'));
+  await Clipboard.setData(
+      const ClipboardData(text: 'https://portal.telnyx.com'));
   if (!context.mounted) return;
   showToast(
     context,
@@ -2942,7 +2965,8 @@ class _AuthPageState extends State<AuthPage> {
                     controller: emailController,
                     keyboardType: TextInputType.emailAddress,
                     autocorrect: false,
-                    decoration: const InputDecoration(hintText: 'you@company.com'),
+                    decoration:
+                        const InputDecoration(hintText: 'you@company.com'),
                   ),
                   const SizedBox(height: 14),
                   const FieldLabel('Password'),
@@ -3041,7 +3065,6 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
@@ -3055,7 +3078,10 @@ class _MainScreenState extends State<MainScreen> {
             const HomeTab(),
             const CampaignsTab(),
             const InboxTab(),
-            if (kLeadMarketEnabled) const LeadMarketTab() else const ContactsPage(),
+            if (kLeadMarketEnabled)
+              const LeadMarketTab()
+            else
+              const ContactsPage(),
             const MoreTab(),
           ],
         ),
@@ -3119,7 +3145,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 }
-
 
 // ---------------------------------------------------------------------------
 // Home
@@ -3186,8 +3211,9 @@ class HomeTab extends StatelessWidget {
                 onTap: () => state.setTab(kTabMore),
                 child: Avatar(
                   radius: 16,
-                  initials:
-                      state.userName.isEmpty ? '' : state.userName[0].toUpperCase(),
+                  initials: state.userName.isEmpty
+                      ? ''
+                      : state.userName[0].toUpperCase(),
                 ),
               ),
             ],
@@ -3202,16 +3228,13 @@ class HomeTab extends StatelessWidget {
               const SizedBox(height: 2),
               Text(firstName, style: h1.copyWith(fontSize: 26)),
               const SizedBox(height: 16),
-
               const _BalanceCard(),
               const SizedBox(height: 12),
               const _Snapshot(),
               const SizedBox(height: 12),
               const _QuickActions(),
-
               const SizedBox(height: 12),
               const _TelnyxRow(),
-
               const SizedBox(height: 24),
               SectionHeader(
                 title: 'Recent activity',
@@ -3221,12 +3244,10 @@ class HomeTab extends StatelessWidget {
               const SizedBox(height: 10),
               const _RecentActivity(),
               const SizedBox(height: 24),
-
               const SectionHeader(title: 'LeadMarket'),
               const SizedBox(height: 10),
               const _MarketBanner(),
               const SizedBox(height: 24),
-
               const AdsCarousel(),
               const SizedBox(height: 22),
               const SectionHeader(title: 'Recommended tools'),
@@ -3238,7 +3259,8 @@ class HomeTab extends StatelessWidget {
                 children: [
                   const Padding(
                     padding: EdgeInsets.only(top: 1),
-                    child: Icon(Icons.info_outline_rounded, size: 14, color: kFaint),
+                    child: Icon(Icons.info_outline_rounded,
+                        size: 14, color: kFaint),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -3248,7 +3270,8 @@ class HomeTab extends StatelessWidget {
                               'separate things. LeadCoins cannot pay for messaging.'
                           : 'Messages are billed by Telnyx to your own account. Your '
                               'LeadText subscription is separate.',
-                      style: const TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
+                      style: const TextStyle(
+                          fontSize: 11.5, color: kFaint, height: 1.5),
                     ),
                   ),
                 ],
@@ -3305,7 +3328,8 @@ class _BalanceCard extends StatelessWidget {
               const Spacer(),
               if (low)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(20),
@@ -3438,7 +3462,8 @@ class _Snapshot extends StatelessWidget {
         children: [
           Expanded(child: _Mini('SMS sent', formatCount(sentBy(Channel.sms)))),
           const _Sep(),
-          Expanded(child: _Mini('Emails sent', formatCount(sentBy(Channel.email)))),
+          Expanded(
+              child: _Mini('Emails sent', formatCount(sentBy(Channel.email)))),
           const _Sep(),
           Expanded(child: _Mini('Replies', formatCount(state.totalReplies))),
           const _Sep(),
@@ -3523,7 +3548,8 @@ class _QuickActions extends StatelessWidget {
             label: 'Contacts',
             onTap: () {
               if (!kLeadMarketEnabled) {
-                state.setTab(kTabContacts); // Contacts is a tab while LeadMarket is off
+                state.setTab(
+                    kTabContacts); // Contacts is a tab while LeadMarket is off
               } else {
                 Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const ContactsPage()),
@@ -3615,7 +3641,8 @@ class _MarketBanner extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                const Icon(Icons.shopping_cart_outlined, size: 46, color: kAccent),
+                const Icon(Icons.shopping_cart_outlined,
+                    size: 46, color: kAccent),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
@@ -3739,7 +3766,8 @@ class _RecentActivity extends StatelessWidget {
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
-                    IconBadge(icon: shown[i].icon, color: shown[i].color, size: 34),
+                    IconBadge(
+                        icon: shown[i].icon, color: shown[i].color, size: 34),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -3894,7 +3922,8 @@ class _AdCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => showToast(context, 'Partner links open here once ads go live.'),
+      onTap: () =>
+          showToast(context, 'Partner links open here once ads go live.'),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -3964,7 +3993,8 @@ class _AdCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 4),
-                        const Icon(Icons.arrow_forward_rounded, size: 13, color: kAccent),
+                        const Icon(Icons.arrow_forward_rounded,
+                            size: 13, color: kAccent),
                       ],
                     ),
                   ),
@@ -3972,7 +4002,8 @@ class _AdCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            Icon(ad.icon, size: 40, color: Colors.white.withValues(alpha: 0.85)),
+            Icon(ad.icon,
+                size: 40, color: Colors.white.withValues(alpha: 0.85)),
           ],
         ),
       ),
@@ -3993,7 +4024,8 @@ class _ToolsList extends StatelessWidget {
     required String sub,
   }) {
     return InkWell(
-      onTap: () => showToast(context, 'Partner links open here once ads go live.'),
+      onTap: () =>
+          showToast(context, 'Partner links open here once ads go live.'),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
@@ -4142,7 +4174,8 @@ class _InboxTabState extends State<InboxTab> {
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 90),
                       itemCount: list.length,
                       separatorBuilder: (_, __) => const Divider(),
-                      itemBuilder: (context, i) => _ConversationTile(convo: list[i]),
+                      itemBuilder: (context, i) =>
+                          _ConversationTile(convo: list[i]),
                     ),
             ),
           ],
@@ -4201,7 +4234,8 @@ class _ConversationTile extends StatelessWidget {
                       shape: BoxShape.circle,
                       border: Border.all(color: kBg, width: 2),
                     ),
-                    child: Icon(convo.channel.icon, size: 11, color: kAccentBright),
+                    child: Icon(convo.channel.icon,
+                        size: 11, color: kAccentBright),
                   ),
                 ),
               ],
@@ -4220,8 +4254,9 @@ class _ConversationTile extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 13.5,
-                            fontWeight:
-                                convo.unread ? FontWeight.w700 : FontWeight.w600,
+                            fontWeight: convo.unread
+                                ? FontWeight.w700
+                                : FontWeight.w600,
                             color: kText,
                           ),
                         ),
@@ -4322,7 +4357,8 @@ class _CallPageState extends State<CallPage> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.lock_outline, size: 14, color: Colors.white54),
+                  const Icon(Icons.lock_outline,
+                      size: 14, color: Colors.white54),
                   const SizedBox(width: 6),
                   const Text(
                     'End-to-end encrypted call',
@@ -4423,7 +4459,7 @@ class _ConversationPageState extends State<ConversationPage> {
         setState(() {
           selectedAttachment = File(result.files.single.path!);
         });
-        
+
         if (!mounted) return; // <--- Add this line here
         showToast(context, 'File attached: ${result.files.single.name}');
       }
@@ -4431,6 +4467,7 @@ class _ConversationPageState extends State<ConversationPage> {
       debugPrint("Error picking file: $e");
     }
   }
+
   @override
   void dispose() {
     controller.dispose();
@@ -4438,7 +4475,7 @@ class _ConversationPageState extends State<ConversationPage> {
     super.dispose();
   }
 
-void _send(Conversation convo) async {
+  void _send(Conversation convo) async {
     final text = controller.text.trim();
     if (text.isEmpty && selectedAttachment == null) return;
     if (!requireSms(context, convo.channel)) return;
@@ -4449,7 +4486,8 @@ void _send(Conversation convo) async {
 
     if (selectedAttachment != null) {
       try {
-        final fileName = '${DateTime.now().millisecondsSinceEpoch}_${selectedAttachment!.path.split('/').last}';
+        final fileName =
+            '${DateTime.now().millisecondsSinceEpoch}_${selectedAttachment!.path.split('/').last}';
         await Supabase.instance.client.storage
             .from('chat-files')
             .upload(fileName, selectedAttachment!);
@@ -4531,8 +4569,12 @@ void _send(Conversation convo) async {
             TextField(
               controller: addressCtrl,
               decoration: InputDecoration(
-                labelText: convo.channel == Channel.sms ? 'Phone Number' : 'Email Address',
-                hintText: convo.channel == Channel.sms ? 'Enter phone number' : 'Enter email address',
+                labelText: convo.channel == Channel.sms
+                    ? 'Phone Number'
+                    : 'Email Address',
+                hintText: convo.channel == Channel.sms
+                    ? 'Enter phone number'
+                    : 'Enter email address',
               ),
             ),
           ],
@@ -4565,7 +4607,8 @@ void _send(Conversation convo) async {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Chat'),
-        content: const Text('Are you sure you want to delete this entire conversation?'),
+        content: const Text(
+            'Are you sure you want to delete this entire conversation?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -4614,7 +4657,8 @@ void _send(Conversation convo) async {
             ),
             ListTile(
               leading: const Icon(Icons.delete_outline, color: kRed),
-              title: const Text('Delete message', style: TextStyle(color: kRed)),
+              title:
+                  const Text('Delete message', style: TextStyle(color: kRed)),
               onTap: () {
                 AppScope.of(context).deleteMessage(convo, message);
                 Navigator.of(ctx).pop();
@@ -4660,11 +4704,13 @@ void _send(Conversation convo) async {
   Widget _ticks(MessageStatus status) {
     switch (status) {
       case MessageStatus.failed:
-        return const Icon(Icons.error_outline_rounded, size: 13, color: Colors.white70);
+        return const Icon(Icons.error_outline_rounded,
+            size: 13, color: Colors.white70);
       case MessageStatus.sent:
         return const Icon(Icons.done_rounded, size: 13, color: Colors.white70);
       case MessageStatus.delivered:
-        return const Icon(Icons.done_all_rounded, size: 13, color: Colors.white70);
+        return const Icon(Icons.done_all_rounded,
+            size: 13, color: Colors.white70);
       case MessageStatus.read:
         return const Row(
           mainAxisSize: MainAxisSize.min,
@@ -4709,7 +4755,8 @@ void _send(Conversation convo) async {
                     convo.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600),
                   ),
                   Text(
                     convo.channel == Channel.sms
@@ -4740,7 +4787,8 @@ void _send(Conversation convo) async {
             itemBuilder: (_) => const [
               PopupMenuItem<String>(value: 'copy', child: Text('Copy contact')),
               PopupMenuItem<String>(value: 'edit', child: Text('Edit contact')),
-              PopupMenuItem<String>(value: 'delete', child: Text('Delete chat')),
+              PopupMenuItem<String>(
+                  value: 'delete', child: Text('Delete chat')),
             ],
           ),
         ],
@@ -4840,10 +4888,10 @@ void _send(Conversation convo) async {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   IconButton(
-    tooltip: 'Attach',
-    icon: const Icon(Icons.add_rounded, color: kMuted),
-    onPressed: _pickAttachment, // <--- Calls our function!
-  ),
+                    tooltip: 'Attach',
+                    icon: const Icon(Icons.add_rounded, color: kMuted),
+                    onPressed: _pickAttachment, // <--- Calls our function!
+                  ),
                   Expanded(
                     child: TextField(
                       controller: controller,
@@ -4866,7 +4914,8 @@ void _send(Conversation convo) async {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(24),
-                          borderSide: const BorderSide(color: kAccentBright, width: 1.2),
+                          borderSide: const BorderSide(
+                              color: kAccentBright, width: 1.2),
                         ),
                       ),
                     ),
@@ -5042,7 +5091,8 @@ class _ComposeSheetState extends State<_ComposeSheet> {
               minLines: 3,
               maxLines: 6,
               textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(hintText: 'Write your message…'),
+              decoration:
+                  const InputDecoration(hintText: 'Write your message…'),
             ),
             if (error != null) ...[
               const SizedBox(height: 10),
@@ -5130,7 +5180,8 @@ class _CampaignsTabState extends State<CampaignsTab> {
               ? EmptyState(
                   icon: Icons.campaign_outlined,
                   title: 'No campaigns yet',
-                  message: 'Create a campaign to message your contacts in bulk.',
+                  message:
+                      'Create a campaign to message your contacts in bulk.',
                   actionLabel: 'New campaign',
                   onAction: _openNew,
                 )
@@ -5216,7 +5267,8 @@ class CampaignCard extends StatelessWidget {
           Row(
             children: [
               Expanded(child: _Stat2('Sent', formatCount(campaign.sent))),
-              Expanded(child: _Stat2('Delivered', formatCount(campaign.delivered))),
+              Expanded(
+                  child: _Stat2('Delivered', formatCount(campaign.delivered))),
               Expanded(child: _Stat2('Replies', formatCount(campaign.replies))),
               Expanded(child: _Stat2('Failed', formatCount(campaign.failed))),
             ],
@@ -5389,7 +5441,8 @@ class CampaignDetailsPage extends StatelessWidget {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      const _LegendDot(color: kAccentBright, label: 'Delivered'),
+                      const _LegendDot(
+                          color: kAccentBright, label: 'Delivered'),
                       const SizedBox(width: 14),
                       _LegendDot(
                         color: kGreen,
@@ -5412,12 +5465,14 @@ class CampaignDetailsPage extends StatelessWidget {
                   if (c.subject.isNotEmpty) ...[
                     const FieldLabel('Subject'),
                     const SizedBox(height: 4),
-                    Text(c.subject, style: const TextStyle(fontSize: 13, color: kText)),
+                    Text(c.subject,
+                        style: const TextStyle(fontSize: 13, color: kText)),
                     const SizedBox(height: 12),
                   ],
                   Text(
                     c.message,
-                    style: const TextStyle(fontSize: 13, height: 1.5, color: kText),
+                    style: const TextStyle(
+                        fontSize: 13, height: 1.5, color: kText),
                   ),
                 ],
               ),
@@ -5522,7 +5577,8 @@ class _EngagementChart extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     for (final l in yLabels)
-                      Text(l, style: const TextStyle(fontSize: 10, color: kFaint)),
+                      Text(l,
+                          style: const TextStyle(fontSize: 10, color: kFaint)),
                   ],
                 ),
               ),
@@ -5561,7 +5617,8 @@ class _ChartPainter extends CustomPainter {
   Path _line(List<double> v, Size size) {
     final path = Path();
     final dx = size.width / (v.length - 1);
-    Offset p(int i) => Offset(i * dx, size.height - (v[i] / maxV) * size.height);
+    Offset p(int i) =>
+        Offset(i * dx, size.height - (v[i] / maxV) * size.height);
     path.moveTo(p(0).dx, p(0).dy);
     for (var i = 1; i < v.length; i++) {
       final prev = p(i - 1);
@@ -5783,7 +5840,8 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
               onChanged: (_) => setState(() {}),
               textCapitalization: TextCapitalization.sentences,
               decoration: InputDecoration(
-                hintText: isEmail ? 'e.g. Product launch' : 'e.g. Website outreach',
+                hintText:
+                    isEmail ? 'e.g. Product launch' : 'e.g. Website outreach',
               ),
             ),
             _gap(),
@@ -5804,7 +5862,8 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
                 controller: fromNameController,
                 onChanged: (_) => setState(() {}),
                 textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(hintText: 'e.g. LeadText Team'),
+                decoration:
+                    const InputDecoration(hintText: 'e.g. LeadText Team'),
               ),
               _gap(),
               Builder(
@@ -5820,12 +5879,14 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
                         children: [
                           const InfoBullet(
                             icon: Icons.warning_amber_rounded,
-                            text: 'Connect at least one SMTP mailbox before creating an email campaign.',
+                            text:
+                                'Connect at least one SMTP mailbox before creating an email campaign.',
                           ),
                           const SizedBox(height: 10),
                           OutlinedButton.icon(
                             onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const EmailProviderPage()),
+                              MaterialPageRoute(
+                                  builder: (_) => const EmailProviderPage()),
                             ),
                             icon: const Icon(Icons.add_rounded, size: 17),
                             label: const Text('Connect mailbox'),
@@ -5870,9 +5931,11 @@ class _NewCampaignPageState extends State<NewCampaignPage> {
                           alignment: Alignment.centerLeft,
                           child: TextButton.icon(
                             onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const EmailProviderPage()),
+                              MaterialPageRoute(
+                                  builder: (_) => const EmailProviderPage()),
                             ),
-                            icon: const Icon(Icons.manage_accounts_outlined, size: 17),
+                            icon: const Icon(Icons.manage_accounts_outlined,
+                                size: 17),
                             label: const Text('Manage mailboxes'),
                           ),
                         ),
@@ -6166,10 +6229,12 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
     final query = searchController.text.trim().toLowerCase();
 
     final matchingContacts = state.contacts.where((c) {
-      final hasAddr = ch == Channel.sms ? c.phone.isNotEmpty : c.email.isNotEmpty;
+      final hasAddr =
+          ch == Channel.sms ? c.phone.isNotEmpty : c.email.isNotEmpty;
       if (!hasAddr) return false;
       if (query.isEmpty) return true;
-      return c.name.toLowerCase().contains(query) || c.detail.toLowerCase().contains(query);
+      return c.name.toLowerCase().contains(query) ||
+          c.detail.toLowerCase().contains(query);
     }).toList();
 
     return Scaffold(
@@ -6206,7 +6271,9 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                 controller: searchController,
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
-                  hintText: selectIndividual ? 'Search individual contacts...' : 'Search groups or lists...',
+                  hintText: selectIndividual
+                      ? 'Search individual contacts...'
+                      : 'Search groups or lists...',
                   prefixIcon: const Icon(Icons.search_rounded, size: 19),
                 ),
               ),
@@ -6219,7 +6286,8 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                     TextButton.icon(
                       onPressed: () {
                         setState(() {
-                          final allKeys = matchingContacts.map((c) => c.key).toSet();
+                          final allKeys =
+                              matchingContacts.map((c) => c.key).toSet();
                           if (selectedKeys.containsAll(allKeys)) {
                             selectedKeys.removeAll(allKeys);
                           } else {
@@ -6228,13 +6296,15 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                         });
                       },
                       icon: Icon(
-                        selectedKeys.containsAll(matchingContacts.map((c) => c.key))
+                        selectedKeys
+                                .containsAll(matchingContacts.map((c) => c.key))
                             ? Icons.check_box_rounded
                             : Icons.check_box_outline_blank_rounded,
                         size: 20,
                       ),
                       label: Text(
-                        selectedKeys.containsAll(matchingContacts.map((c) => c.key))
+                        selectedKeys
+                                .containsAll(matchingContacts.map((c) => c.key))
                             ? 'Deselect All'
                             : 'Select All (${matchingContacts.length})',
                       ),
@@ -6248,7 +6318,8 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                   ? EmptyState(
                       icon: Icons.people_outline_rounded,
                       title: 'No contacts yet',
-                      message: 'Add contacts first, then pick who gets this campaign.',
+                      message:
+                          'Add contacts first, then pick who gets this campaign.',
                       actionLabel: 'Add contacts',
                       onAction: () => Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const ContactsPage()),
@@ -6270,32 +6341,41 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                                 final on = selectedKeys.contains(contact.key);
                                 return InkWell(
                                   onTap: () => setState(() {
-                                    if (!selectedKeys.add(contact.key)) selectedKeys.remove(contact.key);
+                                    if (!selectedKeys.add(contact.key))
+                                      selectedKeys.remove(contact.key);
                                   }),
                                   child: Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 8),
                                     child: Row(
                                       children: [
                                         Checkbox(
                                           value: on,
                                           onChanged: (_) => setState(() {
-                                            if (!selectedKeys.add(contact.key)) selectedKeys.remove(contact.key);
+                                            if (!selectedKeys.add(contact.key))
+                                              selectedKeys.remove(contact.key);
                                           }),
                                           activeColor: kAccent,
                                           visualDensity: VisualDensity.compact,
                                           shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(5),
+                                            borderRadius:
+                                                BorderRadius.circular(5),
                                           ),
                                         ),
                                         const SizedBox(width: 6),
-                                        Avatar(initials: contact.initials, radius: 16),
+                                        Avatar(
+                                            initials: contact.initials,
+                                            radius: 16),
                                         const SizedBox(width: 12),
                                         Expanded(
                                           child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
-                                              Text(contact.displayName, style: rowTitle),
-                                              Text(contact.detail, style: rowSub),
+                                              Text(contact.displayName,
+                                                  style: rowTitle),
+                                              Text(contact.detail,
+                                                  style: rowSub),
                                             ],
                                           ),
                                         ),
@@ -6307,11 +6387,17 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                             ))
                       : ListView.separated(
                           padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
-                          itemCount: 1 + state.groupNames(lists: false).length + state.groupNames(lists: true).length,
+                          itemCount: 1 +
+                              state.groupNames(lists: false).length +
+                              state.groupNames(lists: true).length,
                           separatorBuilder: (_, __) => const Divider(),
                           itemBuilder: (context, i) {
                             final allGroups = [
-                              (id: '__all__', title: 'All contacts', count: state.countFor(null, ch)),
+                              (
+                                id: '__all__',
+                                title: 'All contacts',
+                                count: state.countFor(null, ch)
+                              ),
                               for (final g in state.groupNames(lists: false))
                                 (id: g, title: g, count: state.countFor(g, ch)),
                               for (final g in state.groupNames(lists: true))
@@ -6319,25 +6405,31 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                             ];
 
                             final visible = allGroups
-                                .where((r) => query.isEmpty || r.title.toLowerCase().contains(query))
+                                .where((r) =>
+                                    query.isEmpty ||
+                                    r.title.toLowerCase().contains(query))
                                 .toList();
 
-                            if (i >= visible.length) return const SizedBox.shrink();
+                            if (i >= visible.length)
+                              return const SizedBox.shrink();
                             final r = visible[i];
                             final on = selectedKeys.contains(r.id);
 
                             return InkWell(
                               onTap: () => setState(() {
-                                if (!selectedKeys.add(r.id)) selectedKeys.remove(r.id);
+                                if (!selectedKeys.add(r.id))
+                                  selectedKeys.remove(r.id);
                               }),
                               child: Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 10),
                                 child: Row(
                                   children: [
                                     Checkbox(
                                       value: on,
                                       onChanged: (_) => setState(() {
-                                        if (!selectedKeys.add(r.id)) selectedKeys.remove(r.id);
+                                        if (!selectedKeys.add(r.id))
+                                          selectedKeys.remove(r.id);
                                       }),
                                       activeColor: kAccent,
                                       visualDensity: VisualDensity.compact,
@@ -6348,10 +6440,13 @@ class _SelectContactsPageState extends State<SelectContactsPage> {
                                     const SizedBox(width: 6),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(r.title, style: rowTitle),
-                                          Text('${formatCount(r.count)} contacts', style: rowSub),
+                                          Text(
+                                              '${formatCount(r.count)} contacts',
+                                              style: rowSub),
                                         ],
                                       ),
                                     ),
@@ -6532,10 +6627,13 @@ class ReviewSendPage extends StatelessWidget {
                     ),
                   ),
                   const Divider(),
-                  SummaryRow(label: 'Recipients', value: formatCount(recipients)),
+                  SummaryRow(
+                      label: 'Recipients', value: formatCount(recipients)),
                   if (isSms) ...[
                     const Divider(),
-                    SummaryRow(label: 'Segments per contact', value: '${draft.segments}'),
+                    SummaryRow(
+                        label: 'Segments per contact',
+                        value: '${draft.segments}'),
                     const Divider(),
                     SummaryRow(
                       label: 'Estimated Telnyx cost',
@@ -6558,13 +6656,16 @@ class ReviewSendPage extends StatelessWidget {
                     const Divider(),
                     SummaryRow(
                       label: 'Sending accounts',
-                      value: '${draft.emailAccountIds.length} selected mailbox(es)',
+                      value:
+                          '${draft.emailAccountIds.length} selected mailbox(es)',
                     ),
                   ],
                   const Divider(),
                   SummaryRow(
                     label: 'Billed by',
-                    value: isSms ? 'Your Telnyx account' : 'Your connected email providers',
+                    value: isSms
+                        ? 'Your Telnyx account'
+                        : 'Your connected email providers',
                   ),
                 ],
               ),
@@ -6611,7 +6712,8 @@ class ReviewSendPage extends StatelessWidget {
                     ],
                     Text(
                       draft.message,
-                      style: const TextStyle(fontSize: 13, height: 1.5, color: kText),
+                      style: const TextStyle(
+                          fontSize: 13, height: 1.5, color: kText),
                     ),
                   ],
                 ),
@@ -6812,7 +6914,8 @@ class _ContactsPageState extends State<ContactsPage> {
                   ? EmptyState(
                       icon: Icons.people_outline_rounded,
                       title: 'No contacts yet',
-                      message: 'Paste a list of numbers or emails and save them in one tap.',
+                      message:
+                          'Paste a list of numbers or emails and save them in one tap.',
                       actionLabel: 'Add contacts',
                       onAction: _showAddSheet,
                     )
@@ -6856,12 +6959,17 @@ class _ContactsPageState extends State<ContactsPage> {
                                       ),
                                       actions: [
                                         TextButton(
-                                          onPressed: () => Navigator.of(dialogContext).pop(false),
+                                          onPressed: () =>
+                                              Navigator.of(dialogContext)
+                                                  .pop(false),
                                           child: const Text('Cancel'),
                                         ),
                                         TextButton(
-                                          onPressed: () => Navigator.of(dialogContext).pop(true),
-                                          child: const Text('Delete', style: TextStyle(color: kRed)),
+                                          onPressed: () =>
+                                              Navigator.of(dialogContext)
+                                                  .pop(true),
+                                          child: const Text('Delete',
+                                              style: TextStyle(color: kRed)),
                                         ),
                                       ],
                                     ),
@@ -6950,7 +7058,8 @@ class _ContactRow extends StatelessWidget {
               tooltip: 'Delete contact',
               visualDensity: VisualDensity.compact,
               onPressed: onDelete,
-              icon: const Icon(Icons.delete_outline_rounded, color: kRed, size: 20),
+              icon: const Icon(Icons.delete_outline_rounded,
+                  color: kRed, size: 20),
             ),
           ],
         ),
@@ -7177,8 +7286,9 @@ class _PasteContactsPageState extends State<PasteContactsPage> {
             ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed:
-                  count == 0 ? null : () => Navigator.of(context).pop(result.contacts),
+              onPressed: count == 0
+                  ? null
+                  : () => Navigator.of(context).pop(result.contacts),
               child: Text(
                 count == 0
                     ? 'Save contacts'
@@ -7253,21 +7363,53 @@ const Map<String, List<String>> _categoryNouns = {
 };
 
 const List<String> _companyPrefixes = [
-  'Bright', 'Summit', 'Northwind', 'Bluepeak', 'Harbor',
-  'Cedar', 'Ironwood', 'Lumen', 'Pioneer', 'Oakline',
-  'Redwood', 'Stonebridge', 'Evergreen', 'Atlas', 'Keystone',
+  'Bright',
+  'Summit',
+  'Northwind',
+  'Bluepeak',
+  'Harbor',
+  'Cedar',
+  'Ironwood',
+  'Lumen',
+  'Pioneer',
+  'Oakline',
+  'Redwood',
+  'Stonebridge',
+  'Evergreen',
+  'Atlas',
+  'Keystone',
 ];
 const List<String> _firstNames = [
-  'Alex', 'Jordan', 'Taylor', 'Morgan', 'Casey',
-  'Riley', 'Jamie', 'Avery', 'Quinn', 'Drew',
+  'Alex',
+  'Jordan',
+  'Taylor',
+  'Morgan',
+  'Casey',
+  'Riley',
+  'Jamie',
+  'Avery',
+  'Quinn',
+  'Drew',
 ];
 const List<String> _lastNames = [
-  'Hughes', 'Patel', 'Nguyen', 'Okafor', 'Reed',
-  'Silva', 'Brooks', 'Khan', 'Ellis', 'Moore',
+  'Hughes',
+  'Patel',
+  'Nguyen',
+  'Okafor',
+  'Reed',
+  'Silva',
+  'Brooks',
+  'Khan',
+  'Ellis',
+  'Moore',
 ];
 const List<String> _jobTitles = [
-  'Owner', 'Founder', 'Managing Director',
-  'Operations Manager', 'General Manager', 'CEO',
+  'Owner',
+  'Founder',
+  'Managing Director',
+  'Operations Manager',
+  'General Manager',
+  'CEO',
 ];
 
 T _pick<T>(Random r, List<T> list) => list[r.nextInt(list.length)];
@@ -7321,22 +7463,24 @@ List<Lead> generateDemoInventory({int count = 4000, int seed = 7}) {
     leads.add(
       Lead(
         id: 'LD-${(i + 1).toString().padLeft(5, '0')}',
-    company: company,
-    contactName: '$first $last',
-    jobTitle: _pick(rnd, _jobTitles) ?? 'Founder',
-    phone: phone,
-    email: hasEmail ? '${first.toLowerCase()}.${last.toLowerCase()}@$slug.example.com' : '',
-    website: hasWebsite ? 'https://$slug.example.com' : '',
-    country: country ?? 'USA',
-    state: stateName ?? 'TX',
-    city: city ?? 'Austin',
-    category: category ?? 'Technology',
-    dateAdded: now.subtract(
-      Duration(days: rnd.nextInt(120), hours: rnd.nextInt(24)),
-    ),
-    phoneVerified: hasPhone && rnd.nextDouble() < 0.6,
-    emailVerified: hasEmail && rnd.nextDouble() < 0.6,
-  ), // Lead
+        company: company,
+        contactName: '$first $last',
+        jobTitle: _pick(rnd, _jobTitles) ?? 'Founder',
+        phone: phone,
+        email: hasEmail
+            ? '${first.toLowerCase()}.${last.toLowerCase()}@$slug.example.com'
+            : '',
+        website: hasWebsite ? 'https://$slug.example.com' : '',
+        country: country ?? 'USA',
+        state: stateName ?? 'TX',
+        city: city ?? 'Austin',
+        category: category ?? 'Technology',
+        dateAdded: now.subtract(
+          Duration(days: rnd.nextInt(120), hours: rnd.nextInt(24)),
+        ),
+        phoneVerified: hasPhone && rnd.nextDouble() < 0.6,
+        emailVerified: hasEmail && rnd.nextDouble() < 0.6,
+      ), // Lead
     );
   }
   return leads;
@@ -7508,7 +7652,8 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
       type: f.type,
       summary: f.summary,
       leads: list.take(qty).toList(),
-      orderId: 'LT-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}',
+      orderId:
+          'LT-${DateTime.now().millisecondsSinceEpoch.toString().substring(5)}',
     );
     setState(() => buying = false);
     if (order == null) {
@@ -7570,7 +7715,8 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.toll_rounded, size: 15, color: kAccentBright),
+                  const Icon(Icons.toll_rounded,
+                      size: 15, color: kAccentBright),
                   const SizedBox(width: 6),
                   Text(
                     formatCount(state.coins),
@@ -7751,7 +7897,9 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
                       const Divider(),
                       _FilterSwitch(
                         title: 'Verified email only',
-                        note: type.needsEmail ? null : 'Not part of a phone-only list',
+                        note: type.needsEmail
+                            ? null
+                            : 'Not part of a phone-only list',
                         value: verifiedEmail,
                         onChanged: type.needsEmail
                             ? (v) => setState(() => verifiedEmail = v)
@@ -7760,7 +7908,9 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
                       const Divider(),
                       _FilterSwitch(
                         title: 'Verified phone only',
-                        note: type.needsPhone ? null : 'Not part of an email-only list',
+                        note: type.needsPhone
+                            ? null
+                            : 'Not part of an email-only list',
                         value: verifiedPhone,
                         onChanged: type.needsPhone
                             ? (v) => setState(() => verifiedPhone = v)
@@ -7789,7 +7939,8 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
                   allValue: LeadSort.newest.label,
                   options: [for (final s in LeadSort.values) s.label],
                   onSelected: (v) => setState(
-                    () => sort = LeadSort.values.firstWhere((s) => s.label == v),
+                    () =>
+                        sort = LeadSort.values.firstWhere((s) => s.label == v),
                   ),
                 ),
 
@@ -7836,7 +7987,8 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
                   children: [
                     Padding(
                       padding: EdgeInsets.only(top: 1),
-                      child: Icon(Icons.info_outline_rounded, size: 14, color: kFaint),
+                      child: Icon(Icons.info_outline_rounded,
+                          size: 14, color: kFaint),
                     ),
                     SizedBox(width: 8),
                     Expanded(
@@ -7844,7 +7996,8 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
                         'Lists are non-exclusive: the same leads may be sold to '
                         'several customers. Demo mode shows generated sample '
                         'data; live inventory comes from Google Sheets.',
-                        style: TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
+                        style: TextStyle(
+                            fontSize: 11.5, color: kFaint, height: 1.5),
                       ),
                     ),
                   ],
@@ -7921,7 +8074,8 @@ class _LeadMarketTabState extends State<LeadMarketTab> {
                 const Divider(),
                 SummaryRow(
                   label: 'Estimated total price',
-                  value: '${formatMoney(total.toDouble())} for all ${formatCount(n)}',
+                  value:
+                      '${formatMoney(total.toDouble())} for all ${formatCount(n)}',
                 ),
               ],
             ),
@@ -8031,7 +8185,8 @@ class _ContactTypeCard extends StatelessWidget {
                       letterSpacing: -0.3,
                     ),
                   ),
-                  const Text('/ 1,000 leads', style: TextStyle(fontSize: 10, color: kMuted)),
+                  const Text('/ 1,000 leads',
+                      style: TextStyle(fontSize: 10, color: kMuted)),
                 ],
               ),
               const SizedBox(width: 10),
@@ -8120,7 +8275,8 @@ class _FilterPill extends StatelessWidget {
       onSelected: onSelected,
       position: PopupMenuPosition.under,
       itemBuilder: (_) => [
-        for (final o in options) PopupMenuItem<String>(value: o, child: Text(o)),
+        for (final o in options)
+          PopupMenuItem<String>(value: o, child: Text(o)),
       ],
       child: Container(
         height: 42,
@@ -8395,7 +8551,8 @@ class _BuySheetState extends State<_BuySheet> {
                   const Divider(),
                   SummaryRow(
                     label: 'Price',
-                    value: '${formatCoins(cost)} (${formatMoney(cost.toDouble())})',
+                    value:
+                        '${formatCoins(cost)} (${formatMoney(cost.toDouble())})',
                   ),
                   const Divider(),
                   SummaryRow(
@@ -8429,7 +8586,8 @@ class _BuySheetState extends State<_BuySheet> {
                         MaterialPageRoute(builder: (_) => const WalletPage()),
                       );
                     },
-              child: Text(enough ? 'Buy · ${formatCoins(cost)}' : 'Top up balance'),
+              child: Text(
+                  enough ? 'Buy · ${formatCoins(cost)}' : 'Top up balance'),
             ),
           ],
         ),
@@ -8465,7 +8623,8 @@ class PurchaseSuccessPage extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 32, 20, 28),
           children: [
             const Center(
-              child: IconBadge(icon: Icons.check_rounded, color: kGreen, size: 64),
+              child:
+                  IconBadge(icon: Icons.check_rounded, color: kGreen, size: 64),
             ),
             const SizedBox(height: 18),
             const Text(
@@ -8502,7 +8661,8 @@ class PurchaseSuccessPage extends StatelessWidget {
             const SizedBox(height: 10),
             OutlinedButton(
               onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => OrderDetailPage(order: order)),
+                MaterialPageRoute(
+                    builder: (_) => OrderDetailPage(order: order)),
               ),
               child: const Text('View leads'),
             ),
@@ -8643,7 +8803,8 @@ class OrderDetailPage extends StatelessWidget {
                             value: formatCount(leads.length),
                           ),
                           const Divider(),
-                          SummaryRow(label: 'Paid', value: formatCoins(order.coins)),
+                          SummaryRow(
+                              label: 'Paid', value: formatCoins(order.coins)),
                         ],
                       ),
                     ),
@@ -8749,7 +8910,8 @@ class WalletPage extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           side: const BorderSide(color: kLine),
         ),
-        title: Text('Buy ${bundle.coins} LeadCoins?', style: const TextStyle(fontSize: 17)),
+        title: Text('Buy ${bundle.coins} LeadCoins?',
+            style: const TextStyle(fontSize: 17)),
         content: Text(
           'Price: ${formatMoney(bundle.price)}.\n\n'
           'Demo checkout: no real payment is taken.',
@@ -8907,7 +9069,8 @@ class WalletPage extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 13.5,
                               fontWeight: FontWeight.w700,
-                              color: state.ledger[i].amount > 0 ? kGreen : kText,
+                              color:
+                                  state.ledger[i].amount > 0 ? kGreen : kText,
                             ),
                           ),
                         ],
@@ -8994,7 +9157,8 @@ class MoreTab extends StatelessWidget {
                       icon: Icons.chat_bubble_outline_rounded,
                       title: 'Messages',
                       trailing: state.unreadCount > 0
-                          ? Pill('${state.unreadCount} new', color: kAccentBright)
+                          ? Pill('${state.unreadCount} new',
+                              color: kAccentBright)
                           : null,
                       onTap: () => state.setTab(kTabMessages),
                     ),
@@ -9005,7 +9169,8 @@ class MoreTab extends StatelessWidget {
                       onTap: () {
                         if (kLeadMarketEnabled) {
                           Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => const ContactsPage()),
+                            MaterialPageRoute(
+                                builder: (_) => const ContactsPage()),
                           );
                         } else {
                           state.setTab(kTabContacts);
@@ -9131,11 +9296,15 @@ class MoreTab extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              connected ? formatMoney(state.telnyxBalance) : '—',
+                              connected
+                                  ? formatMoney(state.telnyxBalance)
+                                  : '—',
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w700,
-                                color: connected && state.lowBalance ? kAmber : kText,
+                                color: connected && state.lowBalance
+                                    ? kAmber
+                                    : kText,
                               ),
                             ),
                             if (connected) ...[
@@ -9163,7 +9332,8 @@ class MoreTab extends StatelessWidget {
                                       onPressed: () => state.refreshBalance(),
                                     ),
                             ] else
-                              const Icon(Icons.chevron_right_rounded, color: kFaint),
+                              const Icon(Icons.chevron_right_rounded,
+                                  color: kFaint),
                           ],
                         ),
                       ),
@@ -9186,9 +9356,12 @@ class MoreTab extends StatelessWidget {
                     _MenuRow(
                       icon: Icons.mail_outline_rounded,
                       title: 'Email mailboxes',
-                      value: state.emailProviderConnected ? 'Connected' : 'Not connected',
+                      value: state.emailProviderConnected
+                          ? 'Connected'
+                          : 'Not connected',
                       onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const EmailProviderPage()),
+                        MaterialPageRoute(
+                            builder: (_) => const EmailProviderPage()),
                       ),
                     ),
                     const Divider(),
@@ -9219,36 +9392,41 @@ class MoreTab extends StatelessWidget {
                     ),
                     const Divider(),
                     _MenuRow(
-      icon: Icons.logout_rounded,
-      title: 'Log out',
-      color: kRed,
-      showChevron: false,
-      onTap: () {
-        showDialog(
-          context: context,
-          builder: (BuildContext dialogContext) {
-            return AlertDialog(
-              title: const Text('Log out'),
-              content: const Text('Are you sure you want to log out of LeadText?'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(), // Close dialog, do nothing
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop(); // Close dialog first
-                    Navigator.of(context).popUntil((r) => r.isFirst);
-                    state.signOut();
-                  },
-                  child: const Text('Log out', style: TextStyle(color: kRed)),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    ),
+                      icon: Icons.logout_rounded,
+                      title: 'Log out',
+                      color: kRed,
+                      showChevron: false,
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          builder: (BuildContext dialogContext) {
+                            return AlertDialog(
+                              title: const Text('Log out'),
+                              content: const Text(
+                                  'Are you sure you want to log out of LeadText?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(dialogContext)
+                                      .pop(), // Close dialog, do nothing
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.of(dialogContext)
+                                        .pop(); // Close dialog first
+                                    Navigator.of(context)
+                                        .popUntil((r) => r.isFirst);
+                                    state.signOut();
+                                  },
+                                  child: const Text('Log out',
+                                      style: TextStyle(color: kRed)),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -9407,7 +9585,8 @@ class TelnyxBalanceCard extends StatelessWidget {
                         )
                       : const Icon(Icons.refresh_rounded, size: 17),
                   label: const Text('Refresh'),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 42)),
+                  style:
+                      OutlinedButton.styleFrom(minimumSize: const Size(0, 42)),
                 ),
               ),
               const SizedBox(width: 10),
@@ -9449,9 +9628,6 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
   final imapPortController = TextEditingController(text: '993');
   final imapUsernameController = TextEditingController();
   final imapPasswordController = TextEditingController();
-  final brevoApiKeyController = TextEditingController();
-  final brevoSenderEmailController = TextEditingController();
-  final brevoSenderNameController = TextEditingController();
 
   bool showForm = false;
   bool hideSmtpPassword = true;
@@ -9465,7 +9641,6 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
       if (mounted) {
         final state = AppScope.of(context);
         state.loadEmailProviderStatus();
-        state.loadBrevoStatus();
       }
     });
   }
@@ -9482,37 +9657,58 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
     imapPortController.dispose();
     imapUsernameController.dispose();
     imapPasswordController.dispose();
-    brevoApiKeyController.dispose();
-    brevoSenderEmailController.dispose();
-    brevoSenderNameController.dispose();
     super.dispose();
   }
 
   Future<void> _connect() async {
     final email = emailController.text.trim().toLowerCase();
     final smtpPort = int.tryParse(smtpPortController.text.trim());
-    final imapPort = int.tryParse(imapPortController.text.trim());
+
+    final imapHost = imapHostController.text.trim();
+    final imapPortText = imapPortController.text.trim();
+    final imapUsername = imapUsernameController.text.trim();
+    final imapPassword = imapPasswordController.text;
+
+    final hasAnyImap = imapHost.isNotEmpty ||
+        imapPortText.isNotEmpty ||
+        imapUsername.isNotEmpty ||
+        imapPassword.isNotEmpty;
+
+    final hasCompleteImap = imapHost.isNotEmpty &&
+        imapPortText.isNotEmpty &&
+        imapUsername.isNotEmpty &&
+        imapPassword.isNotEmpty;
+
+    final imapPort = hasCompleteImap ? int.tryParse(imapPortText) : null;
 
     if (!isValidEmail(email)) {
       setState(() => error = 'Enter a valid mailbox email address.');
       return;
     }
+
     if (smtpHostController.text.trim().isEmpty ||
         smtpPort == null ||
+        ![465, 587].contains(smtpPort) ||
         smtpUsernameController.text.trim().isEmpty ||
         smtpPasswordController.text.isEmpty) {
-      setState(() => error = 'Complete the SMTP host, port, username and password.');
+      setState(
+          () => error = 'Complete the SMTP host, port, username and password.');
       return;
     }
-    if (imapHostController.text.trim().isEmpty ||
-        imapPort == null ||
-        imapUsernameController.text.trim().isEmpty ||
-        imapPasswordController.text.isEmpty) {
-      setState(() => error = 'Complete the IMAP details so LeadText can receive replies.');
+
+    if (hasAnyImap && !hasCompleteImap) {
+      setState(() => error = 'Complete all IMAP fields or leave them blank.');
+      return;
+    }
+
+    if (hasCompleteImap &&
+        (imapPort == null || ![143, 993].contains(imapPort))) {
+      setState(() => error = 'Enter a valid IMAP port (143 or 993).');
       return;
     }
 
     setState(() => error = null);
+
     try {
       await AppScope.of(context).connectSmtpMailbox(
         email: email,
@@ -9521,14 +9717,17 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
         smtpPort: smtpPort,
         smtpUsername: smtpUsernameController.text.trim(),
         smtpPassword: smtpPasswordController.text,
-        imapHost: imapHostController.text.trim(),
-        imapPort: imapPort,
-        imapUsername: imapUsernameController.text.trim(),
-        imapPassword: imapPasswordController.text,
+        imapHost: hasCompleteImap ? imapHost : null,
+        imapPort: hasCompleteImap ? imapPort : null,
+        imapUsername: hasCompleteImap ? imapUsername : null,
+        imapPassword: hasCompleteImap ? imapPassword : null,
       );
+
       if (!mounted) return;
+
       smtpPasswordController.clear();
       imapPasswordController.clear();
+
       setState(() {
         showForm = false;
         emailController.clear();
@@ -9543,31 +9742,106 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
     } catch (e) {
       if (mounted) setState(() => error = friendlyError(e));
     }
-    }
+  }
 
-  Future<void> _connectBrevo() async {
-    final apiKey = brevoApiKeyController.text.trim();
-    final senderEmail = brevoSenderEmailController.text.trim();
-    final senderName = brevoSenderNameController.text.trim();
-
-    if (apiKey.isEmpty || !isValidEmail(senderEmail)) {
-      setState(() {
-        error = 'Enter a valid sender email and Brevo API key.';
-      });
-      return;
-    }
-
-    setState(() => error = null);
+  Future<void> _connectImap(EmailMailbox mailbox) async {
+    final hostController = TextEditingController(text: 'imap.gmail.com');
+    final portController = TextEditingController(text: '993');
+    final usernameController = TextEditingController(text: mailbox.email);
+    final passwordController = TextEditingController();
 
     try {
-      await AppScope.of(context).connectBrevoProvider(
-        apiKey: apiKey,
-        senderEmail: senderEmail,
-        senderName: senderName,
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Connect IMAP'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Attach incoming email access to ${mailbox.email}. '
+                  'Your existing SMTP settings will remain unchanged.',
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: hostController,
+                  decoration: const InputDecoration(labelText: 'IMAP host'),
+                  autocorrect: false,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: portController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'IMAP port'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: usernameController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'IMAP username',
+                  ),
+                  autocorrect: false,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'IMAP password / App Password',
+                  ),
+                  autocorrect: false,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final port = int.tryParse(portController.text.trim());
+                if (hostController.text.trim().isEmpty ||
+                    usernameController.text.trim().isEmpty ||
+                    passwordController.text.isEmpty ||
+                    port == null ||
+                    ![143, 993].contains(port)) {
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(
+                      content: Text('Complete all fields with a valid port.'),
+                    ),
+                  );
+                  return;
+                }
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text('Connect IMAP'),
+            ),
+          ],
+        ),
       );
-      brevoApiKeyController.clear();
+
+      if (confirmed != true || !mounted) return;
+
+      await AppScope.of(context).connectImapMailbox(
+        mailboxId: mailbox.id,
+        imapHost: hostController.text.trim(),
+        imapPort: int.parse(portController.text.trim()),
+        imapUsername: usernameController.text.trim(),
+        imapPassword: passwordController.text,
+      );
     } catch (_) {
-      // Error is already displayed by the connection method.
+      // AppState already displays the connection error.
+    } finally {
+      passwordController.clear();
+      hostController.dispose();
+      portController.dispose();
+      usernameController.dispose();
+      passwordController.dispose();
     }
   }
 
@@ -9606,81 +9880,6 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          AppCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text('Brevo email integration', style: h2),
-                    ),
-                    Pill(
-                      state.brevoConnected ? 'Connected' : 'Not connected',
-                      color: state.brevoConnected ? kGreen : kAmber,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                if (state.brevoConnected) ...[
-                  Text(state.brevoSenderEmail, style: rowTitle),
-                  if (state.brevoSenderName.isNotEmpty)
-                    Text(state.brevoSenderName, style: rowSub),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: state.brevoBusy
-                        ? null
-                        : state.disconnectBrevoProvider,
-                    child: const Text(
-                      'Disconnect Brevo',
-                      style: TextStyle(color: kRed),
-                    ),
-                  ),
-                ] else ...[
-                  const Text(
-                    'Connect Brevo using your API key and verified sender details.',
-                    style: bodyMuted,
-                  ),
-                  const SizedBox(height: 14),
-                  _field(
-                    'Brevo API key',
-                    brevoApiKeyController,
-                    obscure: true,
-                  ),
-                  const SizedBox(height: 12),
-                  _field(
-                    'Sender email',
-                    brevoSenderEmailController,
-                    hint: 'you@yourdomain.com',
-                    keyboardType: TextInputType.emailAddress,
-                  ),
-                  const SizedBox(height: 12),
-                  _field(
-                    'Sender name',
-                    brevoSenderNameController,
-                    hint: 'Your business name',
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: state.brevoBusy ? null : _connectBrevo,
-                      child: state.brevoBusy
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('Connect Brevo'),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -9701,7 +9900,8 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
             const AppCard(
               child: InfoBullet(
                 icon: Icons.mail_outline_rounded,
-                text: 'No mailboxes connected yet. Add your first SMTP/IMAP mailbox below.',
+                text:
+                    'No mailboxes connected yet. Add your first SMTP/IMAP mailbox below.',
               ),
             )
           else
@@ -9713,7 +9913,8 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
                       children: [
                         Row(
                           children: [
-                            const Icon(Icons.mark_email_read_outlined, color: kAccent),
+                            const Icon(Icons.mark_email_read_outlined,
+                                color: kAccent),
                             const SizedBox(width: 10),
                             Expanded(
                               child: Column(
@@ -9740,12 +9941,14 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
                               TextButton(
                                 onPressed: state.emailProviderBusy
                                     ? null
-                                    : () => state.setDefaultEmailMailbox(mailbox.id),
+                                    : () => state
+                                        .setDefaultEmailMailbox(mailbox.id),
                                 child: const Text('Set as default'),
                               )
                             else
                               const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                padding: EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 8),
                                 child: Text(
                                   'Default sender',
                                   style: TextStyle(
@@ -9755,11 +9958,19 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
                                   ),
                                 ),
                               ),
+                            if (mailbox.imapHost.isEmpty)
+                              TextButton(
+                                onPressed: state.emailProviderBusy
+                                    ? null
+                                    : () => _connectImap(mailbox),
+                                child: const Text('Connect IMAP'),
+                              ),
                             const Spacer(),
                             TextButton(
                               onPressed: state.emailProviderBusy
                                   ? null
-                                  : () => state.disconnectEmailMailbox(mailbox.id),
+                                  : () =>
+                                      state.disconnectEmailMailbox(mailbox.id),
                               child: const Text(
                                 'Disconnect',
                                 style: TextStyle(color: kRed),
@@ -9788,7 +9999,8 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
                 children: [
                   Row(
                     children: [
-                      const Expanded(child: Text('Connect SMTP / IMAP', style: h2)),
+                      const Expanded(
+                          child: Text('Connect SMTP / IMAP', style: h2)),
                       IconButton(
                         onPressed: () => setState(() => showForm = false),
                         icon: const Icon(Icons.close_rounded),
@@ -9828,7 +10040,12 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
                             : Icons.visibility_off_outlined),
                       )),
                   const SizedBox(height: 18),
-                  const Text('Incoming mail (IMAP)', style: h2),
+                  const Text('Incoming mail (IMAP) — optional', style: h2),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Only needed to receive replies. Leave these fields blank for SMTP-only sending or testing.',
+                    style: bodyMuted,
+                  ),
                   const SizedBox(height: 10),
                   _field('IMAP host', imapHostController,
                       hint: 'imap.yourprovider.com'),
@@ -9876,7 +10093,8 @@ class _EmailProviderPageState extends State<EmailProviderPage> {
           const SizedBox(height: 14),
           const InfoBullet(
             icon: Icons.info_outline_rounded,
-            text: 'SMTP sends email; IMAP lets LeadText check replies. Some providers require app passwords, domain authentication or separate SMTP/IMAP access. Connecting an account does not override provider sending policies.',
+            text:
+                'SMTP sends email; IMAP lets LeadText check replies. Some providers require app passwords, domain authentication or separate SMTP/IMAP access. Connecting an account does not override provider sending policies.',
           ),
         ],
       ),
@@ -9916,7 +10134,8 @@ class _TwilioPageState extends State<TwilioPage> {
     final token = authTokenController.text.trim();
     final number = _normalizePhone(numberController.text.trim());
     if (!sid.startsWith('AC') || token.isEmpty || number == null) {
-      setState(() => error = 'Enter a valid Twilio Account SID, Auth Token and phone number in international format.');
+      setState(() => error =
+          'Enter a valid Twilio Account SID, Auth Token and phone number in international format.');
       return;
     }
     setState(() {
@@ -9986,7 +10205,8 @@ class _TwilioPageState extends State<TwilioPage> {
                   obscureText: true,
                   autocorrect: false,
                   enableSuggestions: false,
-                  decoration: const InputDecoration(hintText: 'Twilio Auth Token'),
+                  decoration:
+                      const InputDecoration(hintText: 'Twilio Auth Token'),
                 ),
                 const SizedBox(height: 14),
                 const FieldLabel('Sending number'),
@@ -10002,15 +10222,20 @@ class _TwilioPageState extends State<TwilioPage> {
                 DropdownButtonFormField<String>(
                   initialValue: numberType,
                   items: const [
-                    DropdownMenuItem(value: 'local', child: Text('Local number')),
-                    DropdownMenuItem(value: 'toll_free', child: Text('Toll-free number')),
+                    DropdownMenuItem(
+                        value: 'local', child: Text('Local number')),
+                    DropdownMenuItem(
+                        value: 'toll_free', child: Text('Toll-free number')),
                   ],
-                  onChanged: busy ? null : (v) => setState(() => numberType = v ?? 'local'),
+                  onChanged: busy
+                      ? null
+                      : (v) => setState(() => numberType = v ?? 'local'),
                   decoration: const InputDecoration(),
                 ),
                 if (error != null) ...[
                   const SizedBox(height: 12),
-                  Text(error!, style: const TextStyle(color: kRed, fontSize: 12)),
+                  Text(error!,
+                      style: const TextStyle(color: kRed, fontSize: 12)),
                 ],
                 const SizedBox(height: 16),
                 FilledButton(
@@ -10019,7 +10244,8 @@ class _TwilioPageState extends State<TwilioPage> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
                         )
                       : const Text('Connect Twilio'),
                 ),
@@ -10029,7 +10255,8 @@ class _TwilioPageState extends State<TwilioPage> {
           const SizedBox(height: 14),
           const InfoBullet(
             icon: Icons.info_outline_rounded,
-            text: 'This screen needs a matching Twilio Edge Function before it can connect. The function must validate and encrypt credentials server-side; do not store Twilio secrets in the app.',
+            text:
+                'This screen needs a matching Twilio Edge Function before it can connect. The function must validate and encrypt credentials server-side; do not store Twilio secrets in the app.',
           ),
         ],
       ),
@@ -10223,7 +10450,8 @@ class _TelnyxPageState extends State<TelnyxPage> {
                   children: [
                     SummaryRow(label: 'API key', value: connection.maskedKey),
                     const Divider(),
-                    SummaryRow(label: 'SMS number', value: connection.smsNumber),
+                    SummaryRow(
+                        label: 'SMS number', value: connection.smsNumber),
                     const Divider(),
                     SummaryRow(
                       label: 'Incoming replies',
@@ -10273,7 +10501,8 @@ class _TelnyxPageState extends State<TelnyxPage> {
                       controller: numberController,
                       keyboardType: TextInputType.phone,
                       autocorrect: false,
-                      decoration: const InputDecoration(hintText: '+14155550101'),
+                      decoration:
+                          const InputDecoration(hintText: '+14155550101'),
                     ),
                     const SizedBox(height: 14),
                     const FieldLabel('Number type'),
@@ -10281,16 +10510,22 @@ class _TelnyxPageState extends State<TelnyxPage> {
                     DropdownButtonFormField<String>(
                       initialValue: numberType,
                       items: const [
-                        DropdownMenuItem(value: 'local', child: Text('Local number')),
-                        DropdownMenuItem(value: 'toll_free', child: Text('Toll-free number')),
+                        DropdownMenuItem(
+                            value: 'local', child: Text('Local number')),
+                        DropdownMenuItem(
+                            value: 'toll_free',
+                            child: Text('Toll-free number')),
                       ],
-                      onChanged: busy ? null : (v) => setState(() => numberType = v ?? 'local'),
+                      onChanged: busy
+                          ? null
+                          : (v) => setState(() => numberType = v ?? 'local'),
                       decoration: const InputDecoration(),
                     ),
                     const SizedBox(height: 8),
                     const Text(
                       'Choose the type of Telnyx number you already own. This does not buy or verify a number for you.',
-                      style: TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
+                      style:
+                          TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
                     ),
                     if (error != null) ...[
                       const SizedBox(height: 12),
@@ -10321,7 +10556,8 @@ class _TelnyxPageState extends State<TelnyxPage> {
                     const Text(
                       'Your key is checked with Telnyx, then stored encrypted on '
                       'our server. It is never saved on your device.',
-                      style: TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
+                      style:
+                          TextStyle(fontSize: 11.5, color: kFaint, height: 1.5),
                     ),
                   ],
                 ),
@@ -10457,7 +10693,8 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(20),
@@ -10520,7 +10757,8 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                           : 'Not subscribed',
                 ),
                 const Divider(),
-                const SummaryRow(label: 'Includes', value: 'Platform access + Email suite'),
+                const SummaryRow(
+                    label: 'Includes', value: 'Platform access + Email suite'),
               ],
             ),
           ),
@@ -10534,7 +10772,8 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
           const SizedBox(height: 20),
           FilledButton(
             onPressed: busy ? null : _pay,
-            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            style:
+                FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
             child: busy
                 ? const SizedBox(
                     width: 20,
@@ -10561,7 +10800,8 @@ Widget _buildFeatureRow(String text) {
     padding: const EdgeInsets.only(bottom: 12),
     child: Row(
       children: [
-        const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 16),
+        const Icon(Icons.check_circle_rounded,
+            color: Colors.greenAccent, size: 16),
         const SizedBox(width: 10),
         Expanded(
           child: Text(
@@ -10631,7 +10871,8 @@ Future<bool> startLeadTextSubscription(BuildContext context) async {
       mode: LaunchMode.externalApplication,
     );
     if (!opened) {
-      throw Exception('Could not open the Paystack checkout. Please try again.');
+      throw Exception(
+          'Could not open the Paystack checkout. Please try again.');
     }
 
     // The user pays in the browser, comes back, and confirms here. Nothing is
@@ -10671,7 +10912,8 @@ Future<bool> startLeadTextSubscription(BuildContext context) async {
         hideBusy();
 
         if (data['success'] == true && data['payment_status'] == 'paid') {
-          await appState.refreshBilling(); // real balance + status from the server
+          await appState
+              .refreshBilling(); // real balance + status from the server
           final coins = (data['coins_awarded'] as num?)?.toInt() ?? 0;
           say(
             coins > 0

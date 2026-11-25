@@ -3,7 +3,6 @@
 
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'main.dart';
@@ -472,112 +471,5 @@ class SupabaseService {
       throw Exception(data['error'] ?? 'Email mailbox request failed.');
     }
     return data;
-  }
-
-  
-  // -------------------------------------------------------------------------
-  // Brevo email provider
-  // -------------------------------------------------------------------------
-
-  static Future<Map<String, dynamic>> fetchBrevoStatus() async {
-    final response = await _db.functions.invoke(
-      'email-provider-status',
-      body: {},
-    );
-
-    final data = response.data is Map
-        ? Map<String, dynamic>.from(response.data as Map)
-        : <String, dynamic>{};
-
-    if (response.status < 200 ||
-        response.status >= 300 ||
-        data.containsKey('error')) {
-      throw Exception(
-        data['error'] ?? 'Could not check Brevo connection.',
-      );
-    }
-
-    return data;
-  }
-
-  static Future<Map<String, dynamic>> connectBrevo({
-    required String apiKey,
-    required String senderEmail,
-    required String senderName,
-  }) async {
-    final response = await _db.functions.invoke(
-      'connect-email-provider',
-      body: {
-        'action': 'connect',
-        'apiKey': apiKey,
-        'senderEmail': senderEmail,
-        'senderName': senderName,
-      },
-    );
-
-    final data = response.data is Map
-        ? Map<String, dynamic>.from(response.data as Map)
-        : <String, dynamic>{};
-
-    if (response.status < 200 ||
-        response.status >= 300 ||
-        data['success'] != true) {
-      throw Exception(data['error'] ?? 'Could not connect Brevo.');
-    }
-
-    return data;
-  }
-
-  static Future<void> disconnectBrevo() async {
-    final response = await _db.functions.invoke(
-      'connect-email-provider',
-      body: {'action': 'disconnect'},
-    );
-
-    final data = response.data is Map
-        ? Map<String, dynamic>.from(response.data as Map)
-        : <String, dynamic>{};
-
-    if (response.status < 200 ||
-        response.status >= 300 ||
-        data['success'] != true) {
-      throw Exception(data['error'] ?? 'Could not disconnect Brevo.');
-    }
-  }
-// -------------------------------------------------------------------------
-  // Edge Functions / Email Sending
-  // -------------------------------------------------------------------------
-
-  static Future<bool> sendEmailCampaign({
-    required String campaignId,
-    required String campaignName,
-    required List<String> recipientEmails,
-    required String fromName,
-    required String fromEmail,
-    required String subject,
-    required String message,
-  }) async {
-    try {
-      final response = await _db.functions.invoke(
-        'send-email',
-        body: {
-          'action': 'send_campaign',
-          'campaign_id': campaignId,
-          'name': campaignName,
-          'channel': 'email',
-          'addresses': recipientEmails,
-          'fromName': fromName,
-          'fromEmail': fromEmail,
-          'subject': subject,
-          'message': message,
-        },
-      );
-      final data = response.data;
-      return response.status >= 200 && response.status < 300 &&
-          data is Map && data['success'] == true;
-    } catch (e) {
-      debugPrint('Error starting Brevo email campaign: $e');
-      return false;
-    }
   }
 }
