@@ -49,3 +49,5 @@ app.*.map.json
 
 # Android generated build files
 /android/build/
+.vercel
+.env*

@@ -1,0 +1,14 @@
+.git
+.dart_tool
+.flutter-plugins-dependencies
+.pub-cache
+.pub
+.widget_preview
+android
+ios
+linux
+macos
+windows
+test
+build/app
+build/intermediates
